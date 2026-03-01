@@ -1,0 +1,22 @@
+economy:
+  seed_capital: 10000             # satoshis for genesis node
+  rent_per_cycle: 1000            # satoshis deducted per tick
+  min_reserve_cycles: 3           # keep N ticks of runway before spawning
+  spawn_threshold_cycles: 5      # need N ticks worth of BTC to consider spawning
+  inheritance_ratio: 0.4          # fraction of excess given to child
+  caution_variance: 0.0           # max fractional increase to reserve/threshold (0 = disabled)
+  caution_heritability: 0.8       # fraction of parent's caution passed to child
+  caution_mutation: 0.1           # std dev of gaussian mutation applied to inherited caution
+
+faucet:
+  rate: 1000                       # satoshis injected per tick
+  distribution: "random_living"   # random_living | poorest | round_robin | wealth_proportional
+  enabled: true
+  growth_rate: 200                # satoshis added to rate per tick (0 = no growth)
+  noise: 0.2                      # 0.0 = pure wealth-proportional, 1.0 = uniform; wealth_proportional only
+
+simulation:
+  tick_interval: 0               # seconds per billing cycle
+  max_ticks: 480                 # 2880 * 30s = 24 hours
+  max_nodes: 500                  # hard cap
+  node_prefix: "myc-"
