@@ -21,6 +21,7 @@ SERVER_INFO_FILE = Path.home() / ".mycelium" / "server.json"
 DEFAULT_SSH_KEY_PATH = Path.home() / ".mycelium" / "ssh" / "deploy_key"
 DEFAULT_WALLET_NAME = "mycelium"
 DEFAULT_VIDEO_IDS_FILE = Path(__file__).parent / "yt-api-cc-scripts" / "cc_video_ids.txt"
+DEFAULT_COOKIES_FILE = Path(__file__).parent / "yt_cookies.txt"
 
 
 def load_server_info() -> dict | None:
@@ -75,6 +76,12 @@ def deploy(
             deployer.deploy_video_ids(str(DEFAULT_VIDEO_IDS_FILE))
         else:
             logger.warning(f"Video IDs file not found at {DEFAULT_VIDEO_IDS_FILE}, skipping")
+
+        if DEFAULT_COOKIES_FILE.exists():
+            logger.info("Uploading YouTube cookies file...")
+            deployer.deploy_cookies(str(DEFAULT_COOKIES_FILE))
+        else:
+            logger.warning(f"Cookies file not found at {DEFAULT_COOKIES_FILE}, content download may fail without auth")
 
         logger.info("Starting orchestrator...")
         deployer.start_orchestrator(bitcoin_xpub=bitcoin_xpub)

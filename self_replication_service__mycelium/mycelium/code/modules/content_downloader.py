@@ -24,10 +24,11 @@ class ContentDownloader:
     MAX_CONSECUTIVE_FAILURES = 10
     DOWNLOAD_TIMEOUT = 60  # 1 minute per video
 
-    def __init__(self, video_ids_file: Path, content_dir: Path, disk_threshold: int = 50):
+    def __init__(self, video_ids_file: Path, content_dir: Path, disk_threshold: int = 50, cookies_file: Path | None = None):
         self.video_ids_file = video_ids_file
         self.content_dir = content_dir
         self.disk_threshold = disk_threshold
+        self.cookies_file = cookies_file
 
         # Verify yt-dlp is available
         try:
@@ -72,8 +73,12 @@ class ContentDownloader:
             "--write-info-json",
             "--no-overwrites",
             "-o", output_template,
-            url,
         ]
+
+        if self.cookies_file and self.cookies_file.exists():
+            cmd.extend(["--cookies", str(self.cookies_file)])
+
+        cmd.append(url)
 
         try:
             result = subprocess.run(

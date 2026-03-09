@@ -28,6 +28,7 @@ class Config:
     DATA_DIR: Path = Path(os.getenv("MYCELIUM_DATA_DIR", "/root/data"))
     CONTENT_DIR: Path = Path(os.getenv("MYCELIUM_CONTENT_DIR", "/root/music"))
     VIDEO_IDS_FILE: Path = Path(os.getenv("MYCELIUM_VIDEO_IDS_FILE", "/root/cc_video_ids.txt"))
+    COOKIES_FILE: Path = Path(os.getenv("MYCELIUM_COOKIES_FILE", "/root/yt_cookies.txt"))
     DISK_THRESHOLD: int = int(os.getenv("MYCELIUM_DISK_THRESHOLD", "50"))
 
     # Node identity

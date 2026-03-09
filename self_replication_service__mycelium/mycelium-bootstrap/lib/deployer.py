@@ -40,6 +40,7 @@ class Deployer:
     REMOTE_LOG_DIR = "/root/logs"
     REMOTE_DATA_DIR = "/root/data"
     REMOTE_VIDEO_IDS_FILE = "/root/cc_video_ids.txt"
+    REMOTE_COOKIES_FILE = "/root/yt_cookies.txt"
 
     def __init__(
         self,
@@ -332,6 +333,15 @@ class Deployer:
         self.upload_file(local_path, self.REMOTE_VIDEO_IDS_FILE)
         logger.info("Video IDs file deployed successfully")
 
+    def deploy_cookies(self, local_path: str) -> None:
+        """Upload YouTube cookies file to remote server."""
+        if not Path(local_path).exists():
+            raise DeployerError(f"Cookies file not found: {local_path}")
+
+        logger.info(f"Uploading cookies file: {local_path} -> {self.REMOTE_COOKIES_FILE}")
+        self.upload_file(local_path, self.REMOTE_COOKIES_FILE)
+        logger.info("Cookies file deployed successfully")
+
     def deploy_content(self, content_dir: str) -> None:
         """Upload content files to remote server."""
         logger.info(f"Deploying content from {content_dir}")
@@ -356,6 +366,7 @@ class Deployer:
             "MYCELIUM_LOG_DIR": self.REMOTE_LOG_DIR,
             "MYCELIUM_DATA_DIR": self.REMOTE_DATA_DIR,
             "MYCELIUM_VIDEO_IDS_FILE": self.REMOTE_VIDEO_IDS_FILE,
+            "MYCELIUM_COOKIES_FILE": self.REMOTE_COOKIES_FILE,
         }
 
         if bitcoin_xpub:

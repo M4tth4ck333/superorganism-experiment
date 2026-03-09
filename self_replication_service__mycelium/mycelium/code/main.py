@@ -93,6 +93,7 @@ class Orchestrator:
                 video_ids_file=Config.VIDEO_IDS_FILE,
                 content_dir=Config.CONTENT_DIR,
                 disk_threshold=Config.DISK_THRESHOLD,
+                cookies_file=Config.COOKIES_FILE,
             )
             loop = asyncio.get_event_loop()
             count = await loop.run_in_executor(self.executor, downloader.download_until_threshold)
