@@ -72,8 +72,8 @@ class ContentDownloader:
             "--embed-thumbnail",
             "--write-info-json",
             "--no-overwrites",
-            "--remote-components",
             "-o", output_template,
+            "--remote-components", "ejs:github",
         ]
 
         if self.cookies_file and self.cookies_file.exists():
