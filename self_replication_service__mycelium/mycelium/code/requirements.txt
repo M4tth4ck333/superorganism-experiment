@@ -1,5 +1,6 @@
 libtorrent
 pyipv8==3.1.0
+yt-dlp
 
 # Bitcoin wallet (watch-only)
 bitcoinlib>=0.6.0

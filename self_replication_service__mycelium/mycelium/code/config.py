@@ -27,6 +27,8 @@ class Config:
     LOG_DIR: Path = Path(os.getenv("MYCELIUM_LOG_DIR", "/root/logs"))
     DATA_DIR: Path = Path(os.getenv("MYCELIUM_DATA_DIR", "/root/data"))
     CONTENT_DIR: Path = Path(os.getenv("MYCELIUM_CONTENT_DIR", "/root/music"))
+    VIDEO_IDS_FILE: Path = Path(os.getenv("MYCELIUM_VIDEO_IDS_FILE", "/root/cc_video_ids.txt"))
+    DISK_THRESHOLD: int = int(os.getenv("MYCELIUM_DISK_THRESHOLD", "50"))
 
     # Node identity
     FRIENDLY_NAME: str = os.getenv("MYCELIUM_FRIENDLY_NAME", "mycelium-node")

@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import Config
-from modules import CodeSync, CodeSyncError, Seedbox, SeedboxError, LiberationAnnouncer
+from modules import CodeSync, CodeSyncError, Seedbox, SeedboxError, LiberationAnnouncer, ContentDownloader, ContentDownloaderError
 from utils import setup_logger
 
 logger = setup_logger(
@@ -70,6 +70,37 @@ class Orchestrator:
         while self.running:
             logger.info("Orchestrator Running")
             await asyncio.sleep(Config.HEARTBEAT_INTERVAL)
+
+    async def download_content_if_needed(self) -> None:
+        """Download content via yt-dlp if content directory is empty."""
+        # Check if content already exists (ignore .info.json metadata files)
+        content_files = [
+            f for f in Config.CONTENT_DIR.iterdir()
+            if f.is_file() and not f.name.endswith(".info.json")
+        ] if Config.CONTENT_DIR.exists() else []
+
+        if content_files:
+            logger.info(f"Content directory already has {len(content_files)} files, skipping download")
+            return
+
+        if not Config.VIDEO_IDS_FILE.exists():
+            logger.warning(f"Video IDs file not found at {Config.VIDEO_IDS_FILE}, skipping content download")
+            return
+
+        logger.info(f"Starting content download from {Config.VIDEO_IDS_FILE}")
+        try:
+            downloader = ContentDownloader(
+                video_ids_file=Config.VIDEO_IDS_FILE,
+                content_dir=Config.CONTENT_DIR,
+                disk_threshold=Config.DISK_THRESHOLD,
+            )
+            loop = asyncio.get_event_loop()
+            count = await loop.run_in_executor(self.executor, downloader.download_until_threshold)
+            logger.info(f"Content download finished: {count} files downloaded")
+        except ContentDownloaderError as e:
+            logger.error(f"Content download failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected content download error: {e}", exc_info=True)
 
     async def initialize_seedbox(self) -> bool:
         """Initialize seedbox in executor thread."""
@@ -139,6 +170,9 @@ class Orchestrator:
         logger.info(f"Branch: {Config.REPO_BRANCH}")
         logger.info(f"Update check interval: {Config.UPDATE_CHECK_INTERVAL}s")
         logger.info(f"Content directory: {Config.CONTENT_DIR}")
+
+        # Download content if needed (one-time, before seedbox)
+        await self.download_content_if_needed()
 
         # Initialize seedbox first (blocking) so content is available for announcer
         if not await self.initialize_seedbox():

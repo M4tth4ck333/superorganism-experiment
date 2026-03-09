@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 SERVER_INFO_FILE = Path.home() / ".mycelium" / "server.json"
 DEFAULT_SSH_KEY_PATH = Path.home() / ".mycelium" / "ssh" / "deploy_key"
 DEFAULT_WALLET_NAME = "mycelium"
-DEFAULT_CONTENT_DIR = Path(__file__).parent / "TestMusic"
+DEFAULT_VIDEO_IDS_FILE = Path(__file__).parent / "yt-api-cc-scripts" / "cc_video_ids.txt"
 
 
 def load_server_info() -> dict | None:
@@ -51,7 +51,6 @@ def deploy(
     host: str,
     ssh_port: int = 22,
     ssh_key_path: str = None,
-    content_dir: str = None,
     bitcoin_xpub: str = None,
 ) -> None:
     """Deploy mycelium to server."""
@@ -71,9 +70,11 @@ def deploy(
         logger.info("Deploying mycelium...")
         deployer.deploy_mycelium()
 
-        if content_dir:
-            logger.info(f"Uploading content from {content_dir}...")
-            deployer.deploy_content(content_dir)
+        if DEFAULT_VIDEO_IDS_FILE.exists():
+            logger.info(f"Uploading video IDs file...")
+            deployer.deploy_video_ids(str(DEFAULT_VIDEO_IDS_FILE))
+        else:
+            logger.warning(f"Video IDs file not found at {DEFAULT_VIDEO_IDS_FILE}, skipping")
 
         logger.info("Starting orchestrator...")
         deployer.start_orchestrator(bitcoin_xpub=bitcoin_xpub)
@@ -120,15 +121,12 @@ Use --host to override or deploy to any server.
 Examples:
   python deploy_mycelium.py                     # Deploy to saved server
   python deploy_mycelium.py --host 95.179.1.1   # Deploy to specific IP
-  python deploy_mycelium.py --no-content        # Skip content upload
         """
     )
 
     parser.add_argument("--host", help="Server IP address (overrides saved server info)")
     parser.add_argument("--port", type=int, default=22, help="SSH port (default: 22)")
     parser.add_argument("--ssh-key", help=f"SSH key path (default: {DEFAULT_SSH_KEY_PATH})")
-    parser.add_argument("--content-dir", help="Content directory to upload")
-    parser.add_argument("--no-content", action="store_true", help="Skip content upload")
     parser.add_argument("--wallet", default=DEFAULT_WALLET_NAME, help=f"Wallet name for xpub (default: {DEFAULT_WALLET_NAME})")
     parser.add_argument("--no-xpub", action="store_true", help="Deploy without Bitcoin wallet")
 
@@ -158,20 +156,12 @@ Examples:
         if not bitcoin_xpub:
             logger.warning("No Bitcoin wallet found, deploying without xpub")
 
-    # Determine content directory
-    content_dir = args.content_dir
-    if not content_dir and not args.no_content:
-        if DEFAULT_CONTENT_DIR.exists():
-            content_dir = str(DEFAULT_CONTENT_DIR)
-            logger.info(f"Auto-detected content directory: {content_dir}")
-
     # Deploy
     try:
         deploy(
             host=host,
             ssh_port=ssh_port,
             ssh_key_path=ssh_key,
-            content_dir=content_dir,
             bitcoin_xpub=bitcoin_xpub,
         )
     except Exception as e:

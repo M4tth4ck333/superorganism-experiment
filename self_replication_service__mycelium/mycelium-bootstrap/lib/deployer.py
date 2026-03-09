@@ -39,6 +39,7 @@ class Deployer:
     REMOTE_CONTENT_DIR = "/root/music"
     REMOTE_LOG_DIR = "/root/logs"
     REMOTE_DATA_DIR = "/root/data"
+    REMOTE_VIDEO_IDS_FILE = "/root/cc_video_ids.txt"
 
     def __init__(
         self,
@@ -230,6 +231,7 @@ class Deployer:
             "git",
             "libsodium-dev",
             "build-essential",
+            "ffmpeg",
         ]
 
         self.run_command(
@@ -312,6 +314,15 @@ class Deployer:
 
         logger.info("Mycelium deployed successfully")
 
+    def deploy_video_ids(self, local_path: str) -> None:
+        """Upload video IDs file to remote server."""
+        if not Path(local_path).exists():
+            raise DeployerError(f"Video IDs file not found: {local_path}")
+
+        logger.info(f"Uploading video IDs file: {local_path} -> {self.REMOTE_VIDEO_IDS_FILE}")
+        self.upload_file(local_path, self.REMOTE_VIDEO_IDS_FILE)
+        logger.info("Video IDs file deployed successfully")
+
     def deploy_content(self, content_dir: str) -> None:
         """Upload content files to remote server."""
         logger.info(f"Deploying content from {content_dir}")
@@ -335,6 +346,7 @@ class Deployer:
             "MYCELIUM_CONTENT_DIR": self.REMOTE_CONTENT_DIR,
             "MYCELIUM_LOG_DIR": self.REMOTE_LOG_DIR,
             "MYCELIUM_DATA_DIR": self.REMOTE_DATA_DIR,
+            "MYCELIUM_VIDEO_IDS_FILE": self.REMOTE_VIDEO_IDS_FILE,
         }
 
         if bitcoin_xpub:
