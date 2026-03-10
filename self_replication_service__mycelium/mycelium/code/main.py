@@ -7,10 +7,12 @@ Manages the event loop for code synchronization and seedbox operations.
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import modules.event_logger as event_logger
 from config import Config
 from modules import CodeSync, CodeSyncError, Seedbox, SeedboxError, LiberationAnnouncer, ContentDownloader, ContentDownloaderError
 from utils import setup_logger
@@ -20,6 +22,17 @@ logger = setup_logger(
     log_file=Config.LOG_DIR / "orchestrator.log",
     level=Config.LOG_LEVEL
 )
+
+
+def _get_version() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(Config.BASE_DIR), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
 
 
 class Orchestrator:
@@ -57,7 +70,13 @@ class Orchestrator:
             try:
                 if self.code_sync.has_updates():
                     logger.info("Updates detected on remote repository")
+                    old_version = _get_version()
                     self.code_sync.pull_updates()
+                    new_version = _get_version()
+                    event_logger.get().log_event("restart", {
+                        "old_version": old_version,
+                        "new_version": new_version,
+                    })
                     logger.info("Updates pulled successfully, restarting")
                     os._exit(Config.EXIT_RESTART)
             except CodeSyncError as e:
@@ -210,6 +229,12 @@ def main() -> int:
     """
     try:
         Config.validate()
+        event_logger.init(Config.LOG_ENDPOINT, Config.LOG_SECRET, Config.FRIENDLY_NAME)
+        event_logger.get().log_event("birth", {
+            "parent": Config.PARENT_NAME,
+            "starting_balance_sat": 0,  # TODO wire real balance
+            "version": _get_version(),
+        })
         orchestrator = Orchestrator()
         asyncio.run(orchestrator.run())
         return Config.EXIT_SUCCESS

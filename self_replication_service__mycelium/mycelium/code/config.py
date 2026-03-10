@@ -35,6 +35,11 @@ class Config:
     FRIENDLY_NAME: str = os.getenv("MYCELIUM_FRIENDLY_NAME", "mycelium-node")
     PUBLIC_IP: str = os.getenv("MYCELIUM_PUBLIC_IP", "")
 
+    # Event logging
+    LOG_ENDPOINT: str = os.getenv("MYCELIUM_LOG_ENDPOINT", "")
+    LOG_SECRET: str = os.getenv("MYCELIUM_LOG_SECRET", "")
+    PARENT_NAME: str = os.getenv("MYCELIUM_PARENT_NAME", "genesis")
+
     # Seedbox configuration
     TORRENT_TRACKER: str = os.getenv(
         "MYCELIUM_TRACKER",

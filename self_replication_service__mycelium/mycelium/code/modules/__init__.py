@@ -3,6 +3,7 @@ from .seedbox import Seedbox, SeedboxError, ContentInfo
 from .liberation_community import LiberationCommunity, LiberatedContentPayload, SeedboxInfoPayload
 from .liberation_announcer import LiberationAnnouncer
 from .content_downloader import ContentDownloader, ContentDownloaderError
+from .event_logger import EventLogger
 
 __all__ = [
     "CodeSync",
@@ -17,4 +18,5 @@ __all__ = [
     "LiberationAnnouncer",
     "ContentDownloader",
     "ContentDownloaderError",
+    "EventLogger",
 ]

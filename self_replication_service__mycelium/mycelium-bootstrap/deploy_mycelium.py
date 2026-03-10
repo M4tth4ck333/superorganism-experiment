@@ -18,6 +18,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 SERVER_INFO_FILE = Path.home() / ".mycelium" / "server.json"
+LOG_ENDPOINT_FILE = Path.home() / ".mycelium" / "log_endpoint"
+LOG_SECRET_FILE = Path.home() / ".mycelium" / "log_secret"
 DEFAULT_SSH_KEY_PATH = Path.home() / ".mycelium" / "ssh" / "deploy_key"
 DEFAULT_WALLET_NAME = "mycelium"
 DEFAULT_VIDEO_IDS_FILE = Path(__file__).parent / "yt-api-cc-scripts" / "cc_video_ids.txt"
@@ -37,6 +39,14 @@ def load_server_info() -> dict | None:
     except (json.JSONDecodeError, IOError) as e:
         logger.error(f"Failed to load server info: {e}")
         return None
+
+
+def load_log_config() -> tuple[str | None, str | None]:
+    endpoint = LOG_ENDPOINT_FILE.read_text().strip() if LOG_ENDPOINT_FILE.exists() else None
+    secret = LOG_SECRET_FILE.read_text().strip() if LOG_SECRET_FILE.exists() else None
+    if not endpoint:
+        logger.warning("No log endpoint found at ~/.mycelium/log_endpoint, deploying without event logging")
+    return endpoint, secret
 
 
 def load_xpub(wallet_name: str = DEFAULT_WALLET_NAME) -> str | None:
@@ -84,7 +94,8 @@ def deploy(
             logger.warning(f"Cookies file not found at {DEFAULT_COOKIES_FILE}, content download may fail without auth")
 
         logger.info("Starting orchestrator...")
-        deployer.start_orchestrator(bitcoin_xpub=bitcoin_xpub)
+        log_endpoint, log_secret = load_log_config()
+        deployer.start_orchestrator(bitcoin_xpub=bitcoin_xpub, log_endpoint=log_endpoint, log_secret=log_secret)
 
         logger.info("Verifying health...")
         if deployer.check_health():

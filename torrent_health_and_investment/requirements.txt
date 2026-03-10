@@ -3,3 +3,4 @@ beautifulsoup4>=4.14.3
 aiohttp>=3.13.2
 bencodepy>=0.9.5
 ttkbootstrap>=1.19.2
+flask>=3.0.0

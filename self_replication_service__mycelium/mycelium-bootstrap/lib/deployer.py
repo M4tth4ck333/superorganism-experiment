@@ -356,7 +356,13 @@ class Deployer:
         escaped_value = value.replace("'", "'\\''")
         self.run_command(f"echo \"{name}='{escaped_value}'\" >> /etc/environment")
 
-    def start_orchestrator(self, bitcoin_xpub: Optional[str] = None) -> None:
+    def start_orchestrator(
+        self,
+        bitcoin_xpub: Optional[str] = None,
+        log_endpoint: Optional[str] = None,
+        log_secret: Optional[str] = None,
+        parent_name: str = "genesis",
+    ) -> None:
         logger.info("Starting orchestrator...")
 
         env_vars = {
@@ -371,6 +377,11 @@ class Deployer:
 
         if bitcoin_xpub:
             env_vars["MYCELIUM_BITCOIN_XPUB"] = bitcoin_xpub
+        if log_endpoint:
+            env_vars["MYCELIUM_LOG_ENDPOINT"] = log_endpoint
+        if log_secret:
+            env_vars["MYCELIUM_LOG_SECRET"] = log_secret
+        env_vars["MYCELIUM_PARENT_NAME"] = parent_name
 
         for name, value in env_vars.items():
             self.set_environment_variable(name, value)
