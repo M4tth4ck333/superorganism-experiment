@@ -53,9 +53,9 @@ class Config:
     LOG_LEVEL: str = os.getenv("MYCELIUM_LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-    # Bitcoin wallet configuration (watch-only)
+    # Bitcoin wallet configuration (spending wallet)
     BITCOIN_WALLET_NAME: str = os.getenv("MYCELIUM_BITCOIN_WALLET", "mycelium_wallet")
-    BITCOIN_XPUB: str = os.getenv("MYCELIUM_BITCOIN_XPUB", "")  # Extended public key only
+    BTC_MNEMONIC: str = os.getenv("MYCELIUM_BTC_MNEMONIC", "")
     BITCOIN_NETWORK: str = os.getenv("MYCELIUM_BITCOIN_NETWORK", "bitcoin")  # mainnet
 
     # Exit codes

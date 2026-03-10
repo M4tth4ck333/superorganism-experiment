@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import modules.event_logger as event_logger
+import modules.wallet as wallet_module
 from config import Config
 from modules import CodeSync, CodeSyncError, Seedbox, SeedboxError, LiberationAnnouncer, ContentDownloader, ContentDownloaderError
 from utils import setup_logger
@@ -229,10 +230,13 @@ def main() -> int:
     """
     try:
         Config.validate()
+        wallet_module.initialize_wallet()
+        w = wallet_module.get_wallet()
         event_logger.init(Config.LOG_ENDPOINT, Config.LOG_SECRET, Config.FRIENDLY_NAME)
         event_logger.get().log_event("birth", {
             "parent": Config.PARENT_NAME,
-            "starting_balance_sat": 0,  # TODO wire real balance
+            "btc_address": w.get_receiving_address() if w else "",
+            "starting_balance_sat": w.get_balance_satoshis() if w else 0,
             "version": _get_version(),
         })
         orchestrator = Orchestrator()

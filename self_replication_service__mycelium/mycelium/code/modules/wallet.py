@@ -1,16 +1,17 @@
 """
-Watch-only Bitcoin wallet for balance monitoring.
+Local spending Bitcoin wallet for autonomous node operations.
 
-This module provides a watch-only wallet using the extended public key (xpub).
-It can monitor balance and derive addresses but CANNOT spend funds.
-
-This is intentionally limited for security - no private keys on the VPS.
+On first boot: creates wallet from MYCELIUM_BTC_MNEMONIC env var,
+persists mnemonic to disk (chmod 600), and removes the env var from
+/etc/environment. On subsequent boots: loads wallet DB from disk directly.
 """
 
 import logging
+import os
+from pathlib import Path
 from typing import Optional
 
-from bitcoinlib.wallets import Wallet, wallet_exists, wallet_delete
+from bitcoinlib.wallets import Wallet
 
 from config import Config
 from utils import setup_logger
@@ -27,184 +28,158 @@ class WalletError(Exception):
     pass
 
 
-class WatchOnlyWallet:
+def _remove_from_etc_environment(key: str) -> None:
+    """Remove a KEY=... line from /etc/environment, ignoring errors."""
+    env_file = Path("/etc/environment")
+    if not env_file.exists():
+        return
+    try:
+        lines = env_file.read_text().splitlines()
+        filtered = [line for line in lines if not line.startswith(f"{key}=")]
+        tmp = env_file.with_suffix(".tmp")
+        tmp.write_text("\n".join(filtered) + "\n")
+        tmp.chmod(0o644)
+        tmp.replace(env_file)
+        logger.info(f"Removed {key} from /etc/environment")
+    except Exception as e:
+        logger.warning(f"Could not remove {key} from /etc/environment: {e}")
+
+
+class SpendingWallet:
     """
-    Watch-only Bitcoin wallet for balance monitoring.
+    Full spending Bitcoin wallet stored locally on the VPS.
 
-    This wallet uses only the extended public key (xpub) and can:
-    - Monitor balance
-    - Derive receiving addresses
-    - Scan for incoming payments
-
-    It CANNOT:
-    - Send transactions
-    - Access private keys
-
-    This is the secure approach for VPS deployment - even if the server
-    is compromised, the attacker cannot spend funds.
+    Holds the private key on disk in a bitcoinlib wallet DB.
+    The mnemonic is also persisted to mnemonic.txt (chmod 600).
     """
 
-    def __init__(
-        self,
-        wallet_name: str = None,
-        xpub: str = None,
-        network: str = "bitcoin",
-        db_uri: Optional[str] = None
-    ):
-        """
-        Initialize watch-only wallet.
+    def __init__(self, wallet: Wallet):
+        self._wallet = wallet
 
-        Args:
-            wallet_name: Name for the wallet (default from config)
-            xpub: Extended public key (default from config)
-            network: Bitcoin network ('bitcoin' for mainnet)
-            db_uri: Optional SQLite database URI
-        """
-        self.wallet_name = wallet_name or Config.BITCOIN_WALLET_NAME
-        self.xpub = xpub or Config.BITCOIN_XPUB
-        self.network = network or Config.BITCOIN_NETWORK
-        self.db_uri = db_uri
-
-        self._wallet: Optional[Wallet] = None
-
-    @property
-    def wallet(self) -> Wallet:
-        """Get the loaded wallet, raising if not loaded."""
-        if self._wallet is None:
-            raise WalletError("Wallet not loaded. Call create_from_xpub() first.")
-        return self._wallet
-
-    @property
-    def is_configured(self) -> bool:
-        """Check if xpub is configured."""
-        return bool(self.xpub)
-
-    def exists(self) -> bool:
-        """Check if wallet already exists."""
-        return wallet_exists(self.wallet_name, db_uri=self.db_uri)
-
-    def create_from_xpub(self, xpub: str = None) -> None:
-        """
-        Create or load watch-only wallet from extended public key.
-
-        Args:
-            xpub: Extended public key (uses config if not provided)
-
-        Raises:
-            WalletError: If xpub is not provided and not in config
-        """
-        xpub = xpub or self.xpub
-
-        if not xpub:
-            raise WalletError(
-                "No xpub provided. Set MYCELIUM_BITCOIN_XPUB environment variable "
-                "or pass xpub parameter."
-            )
-
-        if self.exists():
-            logger.info(f"Loading existing wallet: {self.wallet_name}")
-            self._wallet = Wallet(self.wallet_name, db_uri=self.db_uri)
-        else:
-            logger.info(f"Creating watch-only wallet: {self.wallet_name}")
-            self._wallet = Wallet.create(
-                self.wallet_name,
-                keys=xpub,
-                network=self.network,
-                db_uri=self.db_uri,
-                witness_type="segwit"  # Use native segwit for lower fees
-            )
-
-        logger.info(f"Wallet ready. Balance: {self.get_balance_btc()} BTC")
-
-    def delete(self) -> None:
-        """Delete the wallet database."""
-        if self.exists():
-            logger.warning(f"Deleting wallet: {self.wallet_name}")
-            wallet_delete(self.wallet_name, db_uri=self.db_uri, force=True)
-            self._wallet = None
-
-    def scan(self) -> None:
-        """
-        Scan blockchain for transactions and update balance.
-
-        Call this periodically to check for incoming payments.
-        """
-        logger.info("Scanning blockchain for transactions...")
-        self.wallet.scan()
-        logger.info(f"Scan complete. Balance: {self.get_balance_btc()} BTC")
+    def get_receiving_address(self) -> str:
+        """Get a receiving address for this wallet."""
+        key = self._wallet.get_key()
+        return key.address
 
     def get_balance_satoshis(self) -> int:
         """Get confirmed balance in satoshis."""
-        return self.wallet.balance()
+        return self._wallet.balance()
 
     def get_balance_btc(self) -> float:
         """Get confirmed balance in BTC."""
         return self.get_balance_satoshis() / 100_000_000
 
-    def get_receiving_address(self) -> str:
-        """
-        Get a receiving address.
+    def scan(self) -> None:
+        """Scan blockchain for transactions and update balance."""
+        logger.info("Scanning blockchain for transactions...")
+        self._wallet.scan()
+        logger.info(f"Scan complete. Balance: {self.get_balance_btc()} BTC")
 
-        Even watch-only wallets can derive new addresses from xpub.
+    def send(self, address: str, amount_satoshis: int, fee=None) -> str:
+        """Send Bitcoin to address. Returns txid."""
+        from bitcoinlib.services.services import Service
 
-        Returns:
-            A Bitcoin address string
-        """
-        key = self.wallet.get_key()
-        return key.address
+        balance = self.get_balance_satoshis()
+        if balance < amount_satoshis:
+            raise WalletError(
+                f"Insufficient funds. Balance: {balance} sat, "
+                f"Required: {amount_satoshis} sat"
+            )
 
-    def info(self) -> dict:
-        """
-        Get wallet information.
+        logger.info(f"Sending {amount_satoshis} sat to {address}")
+        tx = self._wallet.send_to(address, amount_satoshis, fee=fee, broadcast=False)
 
-        Returns:
-            Dict with wallet details
-        """
-        return {
-            "name": self.wallet_name,
-            "network": self.network,
-            "watch_only": True,
-            "balance_satoshis": self.get_balance_satoshis(),
-            "balance_btc": self.get_balance_btc(),
-            "receiving_address": self.get_receiving_address(),
-        }
+        if not tx.verified:
+            raise WalletError(f"Transaction verification failed: {tx.error}")
+
+        srv = Service(network=Config.BITCOIN_NETWORK)
+        result = srv.sendrawtransaction(tx.raw_hex())
+
+        if result and result.get("txid"):
+            logger.info(f"Transaction sent: {tx.txid}")
+            return tx.txid
+
+        raise WalletError(f"Broadcast failed: {result}")
 
 
-def get_wallet() -> Optional[WatchOnlyWallet]:
+# Module-level singleton
+_wallet_instance: Optional[SpendingWallet] = None
+
+
+def initialize_wallet() -> None:
     """
-    Get configured wallet instance.
+    Initialize the spending wallet singleton.
 
-    Returns:
-        WatchOnlyWallet if configured, None otherwise
+    First boot (no wallet DB): reads mnemonic from MYCELIUM_BTC_MNEMONIC
+    env var, creates wallet, writes mnemonic.txt (chmod 600), removes
+    env var from /etc/environment.
+
+    Subsequent boots: loads wallet DB from disk directly.
     """
-    wallet = WatchOnlyWallet()
+    global _wallet_instance
 
-    if not wallet.is_configured:
-        logger.debug("Bitcoin wallet not configured (no MYCELIUM_BITCOIN_XPUB)")
-        return None
+    name = Config.BITCOIN_WALLET_NAME
+    network = Config.BITCOIN_NETWORK
+    wallet_db = Config.DATA_DIR / f"{name}.db"
+    mnemonic_file = Config.DATA_DIR / "mnemonic.txt"
+    db_uri = f"sqlite:///{wallet_db}"
+
+    mnemonic_seed_file = Config.DATA_DIR / "btc_mnemonic_seed"
 
     try:
-        wallet.create_from_xpub()
-        return wallet
-    except WalletError as e:
+        if wallet_db.exists():
+            logger.info("Loading wallet from existing DB...")
+            raw = Wallet(name, db_uri=db_uri)
+        else:
+            if mnemonic_seed_file.exists():
+                mnemonic = mnemonic_seed_file.read_text().strip()
+            else:
+                mnemonic = os.environ.get("MYCELIUM_BTC_MNEMONIC") or Config.BTC_MNEMONIC
+            if not mnemonic:
+                logger.warning(
+                    "No wallet DB and no MYCELIUM_BTC_MNEMONIC — wallet not configured"
+                )
+                return
+
+            from bitcoinlib.mnemonic import Mnemonic as _Mnemonic
+            try:
+                _Mnemonic().to_entropy(mnemonic)
+            except Exception:
+                raise WalletError("Invalid BIP39 mnemonic — check seed file or MYCELIUM_BTC_MNEMONIC")
+
+            logger.info("First boot: creating wallet from mnemonic...")
+            raw = Wallet.create(
+                name,
+                keys=mnemonic,
+                network=network,
+                db_uri=db_uri,
+                witness_type="segwit"
+            )
+
+            if wallet_db.exists():
+                wallet_db.chmod(0o600)
+
+            if mnemonic_seed_file.exists():
+                mnemonic_seed_file.unlink()
+
+            fd = os.open(str(mnemonic_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, mnemonic.encode())
+            finally:
+                os.close(fd)
+            logger.info(f"Mnemonic persisted to {mnemonic_file} (mode 600)")
+
+            _remove_from_etc_environment("MYCELIUM_BTC_MNEMONIC")
+            os.environ.pop("MYCELIUM_BTC_MNEMONIC", None)
+
+        _wallet_instance = SpendingWallet(raw)
+        logger.info(f"Wallet ready. Address: {_wallet_instance.get_receiving_address()}")
+
+    except Exception as e:
         logger.error(f"Failed to initialize wallet: {e}")
-        return None
+        _wallet_instance = None
 
 
-if __name__ == "__main__":
-    # Simple test
-    import sys
-
-    logging.basicConfig(level=logging.INFO)
-
-    if len(sys.argv) < 2:
-        print("Usage: python wallet.py <xpub>")
-        print("Or set MYCELIUM_BITCOIN_XPUB environment variable")
-        sys.exit(1)
-
-    xpub = sys.argv[1] if len(sys.argv) > 1 else None
-
-    wallet = WatchOnlyWallet(wallet_name="test_wallet", xpub=xpub)
-    wallet.create_from_xpub()
-
-    print(f"Wallet info: {wallet.info()}")
+def get_wallet() -> Optional[SpendingWallet]:
+    """Return the wallet singleton, or None if not configured."""
+    return _wallet_instance

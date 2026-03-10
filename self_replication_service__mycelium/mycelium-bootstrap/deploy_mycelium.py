@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from lib.deployer import Deployer, DeployerError
@@ -21,7 +22,6 @@ SERVER_INFO_FILE = Path.home() / ".mycelium" / "server.json"
 LOG_ENDPOINT_FILE = Path.home() / ".mycelium" / "log_endpoint"
 LOG_SECRET_FILE = Path.home() / ".mycelium" / "log_secret"
 DEFAULT_SSH_KEY_PATH = Path.home() / ".mycelium" / "ssh" / "deploy_key"
-DEFAULT_WALLET_NAME = "mycelium"
 DEFAULT_VIDEO_IDS_FILE = Path(__file__).parent / "yt-api-cc-scripts" / "cc_video_ids.txt"
 DEFAULT_COOKIES_FILE = Path(__file__).parent / "yt_cookies.txt"
 
@@ -49,20 +49,25 @@ def load_log_config() -> tuple[str | None, str | None]:
     return endpoint, secret
 
 
-def load_xpub(wallet_name: str = DEFAULT_WALLET_NAME) -> str | None:
-    """Load xpub from local Bitcoin wallet."""
-    wallet = BitcoinWallet(wallet_name)
-    if not wallet.exists():
-        return None
-    wallet.load()
-    return wallet.get_xpub()
+def generate_vps_wallet() -> tuple[str, str]:
+    """
+    Generate a fresh ephemeral wallet for VPS injection.
+
+    Returns (mnemonic, btc_address). The local wallet DB is deleted
+    immediately after — only the mnemonic is handed to the VPS.
+    """
+    wallet = BitcoinWallet(f"vps-deploy-{int(time.time())}")
+    mnemonic = wallet.create_new()
+    address = wallet.get_receiving_address()
+    wallet.delete()
+    return mnemonic, address
 
 
 def deploy(
     host: str,
     ssh_port: int = 22,
     ssh_key_path: str = None,
-    bitcoin_xpub: str = None,
+    btc_mnemonic: str = None,
 ) -> None:
     """Deploy mycelium to server."""
     key_path = ssh_key_path or str(DEFAULT_SSH_KEY_PATH)
@@ -95,7 +100,7 @@ def deploy(
 
         logger.info("Starting orchestrator...")
         log_endpoint, log_secret = load_log_config()
-        deployer.start_orchestrator(bitcoin_xpub=bitcoin_xpub, log_endpoint=log_endpoint, log_secret=log_secret)
+        deployer.start_orchestrator(btc_mnemonic=btc_mnemonic, log_endpoint=log_endpoint, log_secret=log_secret)
 
         logger.info("Verifying health...")
         if deployer.check_health():
@@ -145,8 +150,6 @@ Examples:
     parser.add_argument("--host", help="Server IP address (overrides saved server info)")
     parser.add_argument("--port", type=int, default=22, help="SSH port (default: 22)")
     parser.add_argument("--ssh-key", help=f"SSH key path (default: {DEFAULT_SSH_KEY_PATH})")
-    parser.add_argument("--wallet", default=DEFAULT_WALLET_NAME, help=f"Wallet name for xpub (default: {DEFAULT_WALLET_NAME})")
-    parser.add_argument("--no-xpub", action="store_true", help="Deploy without Bitcoin wallet")
 
     args = parser.parse_args()
 
@@ -167,12 +170,18 @@ Examples:
             logger.error("Run 'python acquire_vps.py' first, or specify --host")
             sys.exit(1)
 
-    # Load xpub
-    bitcoin_xpub = None
-    if not args.no_xpub:
-        bitcoin_xpub = load_xpub(args.wallet)
-        if not bitcoin_xpub:
-            logger.warning("No Bitcoin wallet found, deploying without xpub")
+    # Generate fresh VPS wallet
+    logger.info("Generating VPS wallet...")
+    btc_mnemonic, btc_address = generate_vps_wallet()
+    print()
+    print("=" * 60)
+    print("VPS BITCOIN WALLET GENERATED")
+    print("=" * 60)
+    print(f"Address : {btc_address}")
+    print(f"Mnemonic: {btc_mnemonic}")
+    print("SAVE THE MNEMONIC — it is the only way to recover funds!")
+    print("=" * 60)
+    print()
 
     # Deploy
     try:
@@ -180,7 +189,7 @@ Examples:
             host=host,
             ssh_port=ssh_port,
             ssh_key_path=ssh_key,
-            bitcoin_xpub=bitcoin_xpub,
+            btc_mnemonic=btc_mnemonic,
         )
     except Exception as e:
         logger.error(f"Deployment failed: {e}")

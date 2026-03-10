@@ -51,6 +51,8 @@ class Deployer:
         self.ssh_key_path = Path(ssh_key_path)
         self.known_hosts_policy = known_hosts_policy
 
+        self.known_hosts_path = Path.home() / ".mycelium" / "known_hosts"
+
         self.client: Optional[paramiko.SSHClient] = None
         self.host: Optional[str] = None
         self.port: int = 22
@@ -58,6 +60,16 @@ class Deployer:
 
         if not self.ssh_key_path.exists():
             raise DeployerError(f"SSH key not found: {ssh_key_path}")
+
+    def _write_secret_file(self, content: str, remote_path: str) -> None:
+        """Write secret content to a remote file via stdin (never touches command line)."""
+        stdin, stdout, stderr = self.client.exec_command(
+            f"( umask 177 && cat > {remote_path} )"
+        )
+        stdin.write(content.encode())
+        stdin.channel.shutdown_write()
+        if stdout.channel.recv_exit_status() != 0:
+            raise CommandError(f"Failed to write secret file: {stderr.read().decode()}")
 
     def _load_private_key(self) -> paramiko.PKey:
         """Load SSH private key, auto-detecting the key type."""
@@ -103,13 +115,16 @@ class Deployer:
 
         self.client = paramiko.SSHClient()
 
-        # Configure host key policy
-        if self.known_hosts_policy == "auto_add":
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        elif self.known_hosts_policy == "warn":
-            self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
-        else:
+        # TOFU host key pinning
+        self.known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.known_hosts_path.exists():
+            self.client.load_host_keys(str(self.known_hosts_path))
+
+        host_known = self.client.get_host_keys().lookup(host) is not None
+        if host_known:
             self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        else:
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         # Load private key (auto-detect key type)
         private_key = self._load_private_key()
@@ -129,6 +144,7 @@ class Deployer:
                     look_for_keys=False,
                 )
 
+                self.client.save_host_keys(str(self.known_hosts_path))
                 logger.info(f"Connected to {host}")
                 return
 
@@ -198,7 +214,7 @@ class Deployer:
         # Use rsync for efficient directory sync
         rsync_cmd = [
             "rsync", "-avz", "--progress",
-            "-e", f"ssh -i {self.ssh_key_path} -p {self.port} -o StrictHostKeyChecking=no",
+            "-e", f"ssh -i {self.ssh_key_path} -p {self.port} -o StrictHostKeyChecking=yes -o UserKnownHostsFile={self.known_hosts_path}",
             f"{local_path}/",
             f"{self.user}@{self.host}:{remote_path}/"
         ]
@@ -358,7 +374,7 @@ class Deployer:
 
     def start_orchestrator(
         self,
-        bitcoin_xpub: Optional[str] = None,
+        btc_mnemonic: Optional[str] = None,
         log_endpoint: Optional[str] = None,
         log_secret: Optional[str] = None,
         parent_name: str = "genesis",
@@ -375,8 +391,8 @@ class Deployer:
             "MYCELIUM_COOKIES_FILE": self.REMOTE_COOKIES_FILE,
         }
 
-        if bitcoin_xpub:
-            env_vars["MYCELIUM_BITCOIN_XPUB"] = bitcoin_xpub
+        if btc_mnemonic:
+            self._write_secret_file(btc_mnemonic, f"{self.REMOTE_DATA_DIR}/btc_mnemonic_seed")
         if log_endpoint:
             env_vars["MYCELIUM_LOG_ENDPOINT"] = log_endpoint
         if log_secret:
