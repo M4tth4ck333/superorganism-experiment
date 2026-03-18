@@ -71,7 +71,6 @@ class Seedbox:
             logger.debug(f"Torrent already exists: {torrent_file.name}")
             return torrent_file
 
-        logger.info(f"Creating torrent for: {file_path.name}")
 
         fs = lt.file_storage()
         lt.add_files(fs, str(file_path))
@@ -203,7 +202,6 @@ class Seedbox:
                     license=license_info
                 )
 
-                logger.info(f"Added to session: {file_path.name} (infohash: {infohash[:16]}...)")
             except Exception as e:
                 logger.error(f"Failed to add {file_path.name}: {e}")
 
@@ -277,7 +275,7 @@ class Seedbox:
         logger.info(f"Seedbox initialized with {len(self.handles)} torrents")
         logger.info(f"Content registry has {len(self.content_registry)} entries")
 
-    def run_status_loop(self, status_interval: int = 60) -> None:
+    def run_status_loop(self, status_interval: int = 180) -> None:
         """
         Run the seeding status loop (blocking).
 

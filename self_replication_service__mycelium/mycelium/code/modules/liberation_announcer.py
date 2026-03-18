@@ -141,7 +141,7 @@ class LiberationAnnouncer:
 
         return new_announcements
 
-    async def announce_loop(self, interval: int = 30) -> None:
+    async def announce_loop(self, interval: int = 180) -> None:
         """
         Continuously announce content at regular intervals.
 
