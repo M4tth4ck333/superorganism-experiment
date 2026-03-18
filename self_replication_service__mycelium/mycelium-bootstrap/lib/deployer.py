@@ -412,6 +412,11 @@ class Deployer:
         if log_secret:
             env_vars["MYCELIUM_LOG_SECRET"] = log_secret
         env_vars["MYCELIUM_PARENT_NAME"] = parent_name
+        env_vars["MYCELIUM_CAUTION_TRAIT"]          = "0.5"
+        env_vars["MYCELIUM_CAUTION_MUTATION_SIGMA"] = "0.05"
+        env_vars["MYCELIUM_SPAWN_THRESHOLD_DAYS"]   = "60"
+        env_vars["MYCELIUM_SPAWN_RESERVE_DAYS"]     = "30"
+        env_vars["MYCELIUM_INHERITANCE_RATIO"]      = "0.4"
         for name, value in env_vars.items():
             self.set_environment_variable(name, value)
 

@@ -68,6 +68,16 @@ class Config:
     STATE_DB_FILE: Path = DATA_DIR / "state.db"
     INITIAL_CAUTION_TRAIT: float = float(os.getenv("MYCELIUM_CAUTION_TRAIT", "0.5"))
 
+    # Caution trait mutation (injected by deployer at birth — same for genesis and children)
+    CAUTION_MUTATION_SIGMA: float = float(os.getenv("MYCELIUM_CAUTION_MUTATION_SIGMA", "0.05"))
+    CAUTION_TRAIT_MIN: float      = float(os.getenv("MYCELIUM_CAUTION_TRAIT_MIN", "0.1"))
+    CAUTION_TRAIT_MAX: float      = float(os.getenv("MYCELIUM_CAUTION_TRAIT_MAX", "0.9"))
+
+    # Spawn thresholds (injected by deployer; caution=0 baseline values)
+    SPAWN_THRESHOLD_DAYS: int  = int(os.getenv("MYCELIUM_SPAWN_THRESHOLD_DAYS", "60"))
+    SPAWN_RESERVE_DAYS: int    = int(os.getenv("MYCELIUM_SPAWN_RESERVE_DAYS", "30"))
+    INHERITANCE_RATIO: float   = float(os.getenv("MYCELIUM_INHERITANCE_RATIO", "0.4"))
+
     # SporeStack / VPS identity
     SPORESTACK_TOKEN_FILE: Path = DATA_DIR / "sporestack_token"
 
