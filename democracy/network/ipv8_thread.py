@@ -4,6 +4,7 @@ import asyncio
 import os
 from collections import deque
 from typing import Optional, Tuple, Union, Deque
+from uuid import UUID
 
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 
@@ -36,7 +37,7 @@ class IPv8Thread(QThread):
 
     def __init__(
         self,
-        user_id: str,
+        user_id: UUID,
         issue_store: JSONStore[Issue],
         vote_store: JSONStore[Vote],
         parent=None,
@@ -120,7 +121,7 @@ class IPv8Thread(QThread):
         builder = ConfigBuilder().clear_keys().clear_overlays()
 
         os.makedirs("keys", exist_ok=True)
-        builder.add_key("my peer", "curve25519", f"keys/{self._user_id}.pem")
+        builder.add_key("my peer", "curve25519", f"keys/{str(self._user_id)}.pem")
 
         # Thread -> GUI callback: just emit signal; GUI will refresh (coalesced)
         def _data_changed_callback() -> None:

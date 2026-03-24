@@ -1,5 +1,6 @@
 from collections import Counter
 from typing import List, Optional
+from uuid import UUID
 
 from models.DTOs.issue_with_votes import IssueWithVotes
 from models.issue import Issue
@@ -33,7 +34,7 @@ class IssueRepository:
             for e in issues
         ]
 
-    def get(self, issue_id: str) -> Optional[IssueWithVotes]:
+    def get(self, issue_id: UUID) -> Optional[IssueWithVotes]:
         """
         Retrieve a specific issue by its ID along with its vote count.
 

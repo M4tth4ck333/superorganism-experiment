@@ -1,36 +1,34 @@
 from __future__ import annotations
 
-import uuid
+
+from uuid import uuid4, UUID
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtWidgets import QMainWindow, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFrame, QPushButton, \
-    QLabel, QLineEdit, QComboBox
+from PyQt6.QtWidgets import (
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFrame,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QStackedWidget
+)
 
 from config import UI_REFRESH_DELAY
 from models.issue import Issue
 from models.person import Person
+from models.solution import Solution
 from models.vote import Vote
 from storage.issue_reposiory import IssueRepository
 from storage.json_store import JSONStore
-from ui.widgets.create_issue import CreateIssueWidget
-from ui.widgets.create_issue_dialog import CreateIssueDialog
+from ui.models.issue_draft import IssueDraft
+from ui.widgets.create_issue_overlay import CreateIssueOverlay
 from ui.widgets.issue_details import IssueDetailWidget
 from ui.widgets.issue_table import IssueTableWidget
-
-
-class IssueDetailDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Issue Details")
-        self.resize(700, 300)
-
-        layout = QVBoxLayout(self)
-        self.detail_widget = IssueDetailWidget()
-        layout.addWidget(self.detail_widget)
-
-    def show_issue(self, issue_with_votes) -> None:
-        self.detail_widget.show(issue_with_votes)
 
 
 class Application(QMainWindow):
@@ -77,9 +75,6 @@ class Application(QMainWindow):
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.timeout.connect(self._do_refresh)
 
-        self.detail_dialog = IssueDetailDialog(self)
-        self.detail_dialog.detail_widget.approved.connect(self._on_vote)
-
         root = QWidget()
         self.setCentralWidget(root)
 
@@ -88,15 +83,53 @@ class Application(QMainWindow):
         root_layout.setSpacing(0)
 
         sidebar = self._build_sidebar()
-        content = self._build_content()
+
+        self.content_stack = QStackedWidget()
+
+        self.dashboard_page = self._build_dashboard_page()
+        self.issue_detail_page = IssueDetailWidget()
+
+        self.issue_detail_page.back_clicked.connect(self._show_dashboard_page)
+        self.issue_detail_page.approved.connect(self._on_vote)
+        self.issue_detail_page.solution_voted.connect(self._on_solution_vote)
+        self.issue_detail_page.solution_details_requested.connect(self._on_solution_details)
+
+        self.content_stack.addWidget(self.dashboard_page)
+        self.content_stack.addWidget(self.issue_detail_page)
 
         root_layout.addWidget(sidebar)
-        root_layout.addWidget(content, 1)
+        root_layout.addWidget(self.content_stack, 1)
+
+        self.content_stack.setCurrentWidget(self.dashboard_page)
+
+        self.create_issue_overlay = CreateIssueOverlay(root)
+        self.create_issue_overlay.created.connect(self._on_create)
+        self.create_issue_overlay.hide()
 
         # Initial load
         self.refresh()
 
         self._apply_styles()
+
+    def _mock_solutions_for_issue(self, issue: Issue) -> list:
+        return [
+            Solution(
+                id="sol-1",
+                title="Improve validation and review flow",
+                description="Introduce a clearer validation pipeline and a better review UI so voters can understand the issue and decide faster.",
+                votes=42,
+                status_text="Validated by core team",
+                highlighted=True,
+            ),
+            Solution(
+                id="sol-2",
+                title="Split issue discussion from final voting",
+                description="Allow issue discussion and solution voting to happen separately so users can support the issue without prematurely endorsing one implementation.",
+                votes=17,
+                status_text="Under technical review",
+                highlighted=False,
+            ),
+        ]
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
@@ -130,7 +163,7 @@ class Application(QMainWindow):
 
         return sidebar
 
-    def _build_content(self) -> QWidget:
+    def _build_dashboard_page(self) -> QWidget:
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(34, 28, 34, 28)
@@ -142,7 +175,7 @@ class Application(QMainWindow):
 
         self.create_btn = QPushButton("Create New Issue")
         self.create_btn.setObjectName("primaryButton")
-        self.create_btn.clicked.connect(self._open_create_dialog)
+        self.create_btn.clicked.connect(self._open_create_overlay)
 
         header.addWidget(self.title_label)
         header.addStretch()
@@ -171,7 +204,7 @@ class Application(QMainWindow):
 
         self.issue_table = IssueTableWidget()
         self.issue_table.selected.connect(self._on_select)
-        self.issue_table.activated.connect(self._open_detail_dialog)
+        self.issue_table.activated.connect(self._open_issue_details)
 
         table_layout.addWidget(self.issue_table)
 
@@ -267,11 +300,14 @@ class Application(QMainWindow):
         """
         self.issue_table.load(self.repo.get_all())
 
-        current_id = self.detail_dialog.detail_widget.current_issue_id
+        current_id = self.issue_detail_page.current_issue_id
         if current_id:
             e = self.repo.get(current_id)
             if e:
-                self.detail_dialog.show_issue(e)
+                self.issue_detail_page.show_issue(
+                    e,
+                    self._mock_solutions_for_issue(e.issue)
+                )
 
     def schedule_refresh(self) -> None:
         """
@@ -289,10 +325,8 @@ class Application(QMainWindow):
         self._refresh_pending = False
         self.refresh()
 
-    def _open_create_dialog(self) -> None:
-        dialog = CreateIssueDialog(self)
-        dialog.created.connect(self._on_create)
-        dialog.exec()
+    def _open_create_overlay(self) -> None:
+        self.create_issue_overlay.open_overlay()
 
     def _on_search_changed(self, text: str) -> None:
         self.issue_table.set_search_text(text)
@@ -303,41 +337,41 @@ class Application(QMainWindow):
     # -----------------------------
     # Handlers
     # -----------------------------
-    def _on_create(self, issue: Issue):
+    def _on_create(self, draft: IssueDraft):
         """
         Handles creation of a new issue. Sets the creator to the current user and adds it to the store.
         Refreshes the issue list afterwards.
 
-        :param issue: Issue to create.
+        :param draft: Issue to create.
         :return: None
         """
-        issue.creator_id = self.user.id
+        errors = draft.validate()
+        if errors:
+            return
+
+        issue = Issue(
+            title=draft.title,
+            description=draft.description,
+            creator_id=self.user.id,
+        )
+
         self.issue_store.add(issue)
-
         self.refresh()
-
         self.broadcast_new_issue(issue)
 
-    def _on_select(self, issue_id: str):
+    def _on_select(self, issue_id: UUID):
         """
         Handles selection of an issue from the list. Loads the issue details into the detail frame.
 
         :param issue_id: ID of the selected issue.
         :return: None
         """
-        issue = self.repo.get(issue_id)
-        if issue:
-            self.detail_dialog.show_issue(issue)
+        pass
 
-    def _open_detail_dialog(self, issue_id: str) -> None:
-        print("open dialog for:", issue_id)
-        issue = self.repo.get(issue_id)
-        print("repo returned:", issue)
-        if issue:
-            self.detail_dialog.show_issue(issue)
-            self.detail_dialog.exec()
+    def _open_issue_details(self, issue_id: UUID) -> None:
+        self._show_issue_detail_page(issue_id)
 
-    def _on_vote(self, issue_id: str):
+    def _on_vote(self, issue_id: UUID):
         """
         Handles voting on an issue. Checks if the user has already voted, and if not, records the vote.
         Refreshes the issue list afterwards.
@@ -350,7 +384,6 @@ class Application(QMainWindow):
                 return # already voted
 
         vote = Vote(
-            id=str(uuid.uuid4()),
             voter_id=self.user.id,
             issue_id=issue_id,
         )
@@ -359,3 +392,23 @@ class Application(QMainWindow):
         self.refresh()
 
         self.broadcast_new_vote(vote)
+
+    def _on_solution_vote(self, issue_id: UUID, solution_id: str) -> None:
+        print(f"Vote on solution {solution_id} for issue {issue_id}")
+
+    def _on_solution_details(self, issue_id: UUID, solution_id: str) -> None:
+        print(f"Open details for solution {solution_id} of issue {issue_id}")
+
+    def _show_dashboard_page(self) -> None:
+        self.content_stack.setCurrentWidget(self.dashboard_page)
+
+    def _show_issue_detail_page(self, issue_id: UUID) -> None:
+        issue = self.repo.get(issue_id)
+        if not issue:
+            return
+
+        self.issue_detail_page.show_issue(
+            issue,
+            self._mock_solutions_for_issue(issue.issue),
+        )
+        self.content_stack.setCurrentWidget(self.issue_detail_page)

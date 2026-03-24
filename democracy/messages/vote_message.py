@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 from ipv8.messaging.payload_dataclass import DataClassPayload
 
@@ -18,9 +19,9 @@ class VoteMessage(DataClassPayload[2], BaseMessage[Vote]):
         issue_id (str): Identifier of the issue in which the vote was cast.
         created_at (str): Timestamp when the vote was created (in ISO format).
     """
-    id: str
     voter_id: str
     issue_id: str
+    id: str
     created_at: str
 
     @property
@@ -32,18 +33,18 @@ class VoteMessage(DataClassPayload[2], BaseMessage[Vote]):
 
     def to_model(self) -> Vote:
         return Vote(
-            id=self.id,
-            voter_id=self.voter_id,
-            issue_id=self.issue_id,
+            voter_id=UUID(self.voter_id),
+            issue_id=UUID(self.issue_id),
+            id=UUID(self.id),
             created_at=parse_datetime(self.created_at),
         )
 
     @classmethod
     def from_model(cls, vote: Vote) -> "VoteMessage":
         return cls(
-            id=vote.id,
-            voter_id=vote.voter_id,
-            issue_id=vote.issue_id,
+            voter_id=str(vote.voter_id),
+            issue_id=str(vote.issue_id),
+            id=str(vote.id),
             created_at=vote.created_at.isoformat(),
         )
 

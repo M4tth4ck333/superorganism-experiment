@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from uuid import UUID
 
 from PyQt6.QtCore import (
     Qt,
@@ -44,8 +45,8 @@ class ProgressDelegate(QStyledItemDelegate):
 
 
 class IssueTableWidget(QWidget):
-    selected = pyqtSignal(str)
-    activated = pyqtSignal(str)
+    selected = pyqtSignal(UUID)
+    activated = pyqtSignal(UUID)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -108,16 +109,14 @@ class IssueTableWidget(QWidget):
     def _emit_for_proxy_row(self, proxy_row: int, signal) -> None:
         proxy_index = self.proxy.index(proxy_row, 0)
         source_index = self.proxy.mapToSource(proxy_index)
-        print("proxy row:", proxy_row, "source row:", source_index.row(), "valid:", source_index.isValid())
 
         if not source_index.isValid():
             return
 
         issue_id = self.model.index(source_index.row(), 0).data(Qt.ItemDataRole.UserRole)
-        print("resolved issue_id:", issue_id)
 
         if issue_id:
-            signal.emit(str(issue_id))
+            signal.emit(issue_id)
 
     def _on_selection_changed(self, _selected, _deselected) -> None:
         rows = self.table.selectionModel().selectedRows()
@@ -125,7 +124,6 @@ class IssueTableWidget(QWidget):
             self._emit_for_proxy_row(rows[0].row(), self.selected)
 
     def _on_double_clicked(self, index) -> None:
-        print("double clicked", index.row(), index.column(), index.isValid())
         if not index.isValid():
             return
 

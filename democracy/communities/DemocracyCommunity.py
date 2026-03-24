@@ -4,7 +4,8 @@ from ipv8.community import Community, CommunitySettings
 from ipv8.lazy_community import lazy_wrapper
 from ipv8.peer import Peer
 
-from config import COMMUNITY_ID, COMMUNICATION_INTERVAL
+from config import COMMUNICATION_INTERVAL
+from constants import COMMUNITY_ID
 from messages.base_message import BaseMessage
 from messages.issue_message import IssueMessage
 from messages.vote_message import VoteMessage

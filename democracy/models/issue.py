@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict
+from uuid import uuid4, UUID
 
-from constants import ISSUE_THRESHOLD
 from models.utils import parse_datetime
 
 
-@dataclass
+@dataclass(frozen=True)
 class Issue:
     """
     Represents an issue with its details.
@@ -17,14 +17,12 @@ class Issue:
         description (str): Description of the issue.
         creator_id (str): Identifier of the creator of the issue.
         created_at (datetime): Timestamp when the issue was created (in UTC).
-        threshold (int): Vote threshold for the issue.
     """
-    id: str
     title: str
+    creator_id: UUID
     description: str = ""
-    creator_id: str = ""
+    id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    threshold: int = ISSUE_THRESHOLD
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Issue":
@@ -34,6 +32,12 @@ class Issue:
         Args:
             data (Dict[str, Any]): A dictionary containing issue data.
         """
+        if "creator_id" in data:
+            data["creator_id"] = UUID(data["creator_id"])
+
+        if "id" in data:
+            data["id"] = UUID(data["id"])
+
         if "created_at" in data:
             data["created_at"] = parse_datetime(data["created_at"])
 
@@ -46,5 +50,7 @@ class Issue:
         :return: A dictionary representation of the Issue instance.
         """
         d = self.__dict__.copy()
+        d["creator_id"] = str(self.creator_id)
+        d["id"] = str(self.id)
         d["created_at"] = self.created_at.isoformat()
         return d

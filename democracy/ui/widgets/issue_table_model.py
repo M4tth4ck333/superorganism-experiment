@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import List, Optional
+from uuid import UUID
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
 
+from constants import ISSUE_THRESHOLD
 from models.DTOs.issue_with_votes import IssueWithVotes
 
 
@@ -37,15 +39,15 @@ class IssueTableModel(QAbstractTableModel):
         col = index.column()
         i = self._issues[index.row()]
         issue = i.issue
-        progress = min(100, int((i.votes / issue.threshold) * 100))
-        status = "Passed" if i.votes >= issue.threshold else "Open"
+        progress = min(100, int((i.votes / ISSUE_THRESHOLD) * 100))
+        status = "Passed" if i.votes >= ISSUE_THRESHOLD else "Open"
 
         # Raw values for this row
         values = [
-            issue.id[:8] + "...",
+            str(issue.id)[:8] + "...",
             issue.title,
             str(issue.creator_id)[:24] + "...",
-            issue.threshold,
+            ISSUE_THRESHOLD,
             i.votes,
             progress,
             status,
@@ -75,7 +77,7 @@ class IssueTableModel(QAbstractTableModel):
         self._issues = list(issues)
         self.endResetModel()
 
-    def issue_id_at(self, row: int) -> Optional[str]:
+    def issue_id_at(self, row: int) -> Optional[UUID]:
         if 0 <= row < len(self._issues):
             return self._issues[row].issue.id
         return None
