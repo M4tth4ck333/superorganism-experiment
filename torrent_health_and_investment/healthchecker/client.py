@@ -29,7 +29,7 @@ class DHTClient:
             a = self.ses.pop_alerts()
             if not a:
                 break
-            alerts.append(a)
+            alerts.extend(a)
         return alerts
     
     def get_detailed_stats(self, magnet_link: str, timeout: float = 10.0) -> Dict:
@@ -57,14 +57,15 @@ class DHTClient:
                 atp.flags |= lt.torrent_flags.duplicate_is_error \
                             | lt.torrent_flags.upload_mode \
                             | lt.torrent_flags.duplicate_is_error
-                
+
                 try:
                     handle = self.ses.add_torrent(atp)
                     self.torrents[infohash_hex] = handle
                 except Exception as e:
                     print(f"Error adding torrent: {e}")
                     return {"seeders": 0, "leechers": 0, "total_peers": 0, "error": str(e)}
-            
+                h = None
+
             seeders = 0
             leechers = 0
             total_peers = 0
@@ -89,8 +90,11 @@ class DHTClient:
                             self.torrent_handles[s.handle] = s
 
                 self.ses.post_torrent_updates()
+                if h is None:
+                    time.sleep(0.5)
+                    continue
                 status = h.status()
-                
+
                 # Check if we have metadata
                 if not status.has_metadata:
                     time.sleep(0.5)
@@ -134,6 +138,6 @@ class DHTClient:
             if "btih:" in magnet_link:
                 parts = magnet_link.split("btih:")[1].split("&")[0]
                 return parts
-        except:
+        except Exception:
             pass
         return ""

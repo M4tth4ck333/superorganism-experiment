@@ -7,22 +7,17 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from healthchecker.db import get_latest_seeding_levels, init_db
+from healthchecker.db import get_latest_seeding_levels
 from healthchecker.sampler import HealthChecker
 
 
 class SwarmHealthGUI:
 
-    def __init__(self, csv_path: str = "torrents.csv", mode: str = "csv", seedbox_fleet: Optional[dict] = None):
-        self.csv_path = csv_path
-        self.mode = mode
+    def __init__(self, seedbox_fleet: Optional[dict] = None):
         self.checker: Optional[HealthChecker] = None
         self.running = Event()
         self.refresh_thread: Optional[Thread] = None
         self.seedbox_fleet = seedbox_fleet if seedbox_fleet is not None else {}
-        
-        # Initialize database
-        init_db()
         
         # Create main window
         self.root = ttk.Tk()
@@ -30,7 +25,7 @@ class SwarmHealthGUI:
         self.root.geometry("1200x800")
         
         # Configure style
-        style = ttk.Style("darkly")
+        ttk.Style("darkly")
         
         self.setup_ui()
         self.start_refresh_loop()
@@ -45,7 +40,7 @@ class SwarmHealthGUI:
         title_label = ttk.Label(
             main_frame, 
             text="SwarmHealth - Creative Commons Torrent Monitor",
-            font=("Ãrial", 16, "bold")
+            font=("Arial", 16, "bold")
         )
         title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
         
@@ -262,12 +257,6 @@ class SwarmHealthGUI:
                     last_check
                 ))
 
-                self.tree.set(item, "Exploding", f"{exploding_str}")
-                
-                if total_peers > 0:
-                    self.tree.set(item, "Status", "Healthy")
-                else:
-                    self.tree.set(item, "Status", "No Peers")
             
             self.log(f"Refreshed data: {total} entries, {healthy} healthy, {unhealthy} unhealthy")
 
@@ -336,7 +325,7 @@ class SwarmHealthGUI:
                 if not self.running.is_set():  # Only refresh if checker is not running
                     try:
                         self.root.after(0, self.refresh_data)
-                    except:
+                    except Exception:
                         pass
         
         self.refresh_thread = Thread(target=refresh_loop, daemon=True)
@@ -353,16 +342,17 @@ class SwarmHealthGUI:
             def run_checker():
                 try:
                     if not self.checker:
-                        self.checker = HealthChecker(csv_path=self.csv_path, mode=self.mode)
+                        self.checker = HealthChecker()
                         self.checker.initialize()
                     # Run in background
                     def checker_loop():
                         while self.running.is_set():
                             try:
                                 health = self.checker.run_once()
-                                self.root.after(0, lambda: self.log(
-                                    f"Health check: {health['infohash'][:16] if health['infohash'] else 'N/A'} - {health['peers']} peers"
-                                ))
+                                if health is not None:
+                                    self.root.after(0, lambda h=health: self.log(
+                                        f"Health check: {h['infohash'][:16] if h['infohash'] else 'N/A'} - {h['peers']} peers"
+                                    ))
                                 self.root.after(0, self.refresh_data)
                             except Exception as e:
                                 self.root.after(0, lambda: self.log(f"Error in health check: {e}"))
@@ -388,7 +378,7 @@ class SwarmHealthGUI:
         self.root.mainloop()
 
 
-def run_gui(csv_path: str = "torrents.csv", mode: str = "csv", seedbox_fleet: dict = None):
-    app = SwarmHealthGUI(csv_path, mode, seedbox_fleet=seedbox_fleet)
+def run_gui(seedbox_fleet: dict = None):
+    app = SwarmHealthGUI(seedbox_fleet=seedbox_fleet)
     app.run()
 

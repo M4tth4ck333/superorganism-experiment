@@ -76,8 +76,8 @@ def insert_received_content(
     Insert received content from IPV8 network.
     Returns False if already exists (duplicate infohash).
     """
+    (con, cur) = get_con()
     try:
-        (con, cur) = get_con()
         cur.execute(
             """INSERT INTO received_content
                (infohash, url, license, magnet_link, received_at, source_peer)
@@ -85,11 +85,12 @@ def insert_received_content(
             (infohash, url, license, magnet_link, received_at, source_peer)
         )
         con.commit()
-        con.close()
         return True
     except sqlite3.IntegrityError:
         # Duplicate infohash - already in database
         return False
+    finally:
+        con.close()
 
 
 def get_received_content_for_sampling(limit: int = 10) -> List[Dict]:
@@ -143,9 +144,9 @@ def insert_sample(
     infohash_hex: str, 
     ts: int, 
     peers_dht: int, 
-    raw_peers_json: str | None = None,
-    url: str | None = None,
-    license: str | None = None,
+    raw_peers_json: Optional[str] = None,
+    url: Optional[str] = None,
+    license: Optional[str] = None,
     magnet_link: str | None = None,
     seeders: int = 0,
     leechers: int = 0,

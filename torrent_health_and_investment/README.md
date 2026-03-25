@@ -1,12 +1,6 @@
 # SwarmHealth - Creative Commons Torrent Health Checker
 
-SwarmHealth is a health monitoring tool for Creative Commons licensed torrents. It tracks seeding levels, peer counts, and calculates growth metrics to monitor the health of torrent swarms.
-
-**Clone the repo using the --recursive flag for the ipv8 submodule:**
-
-```
-git clone --recursive https://github.com/hmcostaa/SwarmHealth-Checker.git
-```
+SwarmHealth monitors the health of Creative Commons licensed torrents discovered through the IPv8 peer network. It tracks seeding levels, peer counts, and calculates growth metrics, displayed in a live GUI dashboard.
 
 ## Features
 
@@ -17,42 +11,9 @@ git clone --recursive https://github.com/hmcostaa/SwarmHealth-Checker.git
   - **Exploding Estimator**: Score (0-100) indicating rapid swarm growth
 - **Creative Commons Filtering**: Only monitors torrents with Creative Commons licenses
 - **Retry Logic**: Automatically retries health checks if DHT returns empty results
-- **GUI Dashboard**: Beautiful graphical interface showing real-time metrics
-- **CSV Integration**: Loads torrent data from CSV files with magnet links
-
-## Requirements
-
-- Python 3.12
-- libtorrent (python-libtorrent)
-- tkinter (usually included with Python, required for GUI)
-
-**If tkinter not installed:**
-
-```
-sudo apt install python3-tk
-```
-
-## Virtual Environment
-
-1. **Create Environment:**
-
-```
-python -m venv /path/to/new/virtual/environment
-```
-
-2. **Activate Environment:**
-
-_Windows:_
-
-```
-/path/to/new/virtual/environment\Scripts\activate
-```
-
-_macOS/Linux:_
-
-```
-source /path/to/new/virtual/environment/bin/activate
-```
+- **GUI Dashboard**: Real-time graphical interface with sortable metrics table
+- **IPv8 Network**: Discovers torrents via the Liberation Community gossip protocol
+- **Seedbox Fleet**: Shows connected nodes with uptime, disk usage, BTC balance, and region
 
 ## Installation
 
@@ -61,106 +22,29 @@ source /path/to/new/virtual/environment/bin/activate
    ```bash
    python -m pip install --upgrade -r requirements.txt
    ```
-
-2. **Verify installation:**
-
-   ```bash
-   python -c "import libtorrent; print('libtorrent version:', libtorrent.version)"
-   ```
-
-3. **Install the py-ipv8 submodule in development mode:**
-
-   ```bash
-   cd py-ipv8 && pip install -e .
-   ```
-
-## CSV File Format
-
-Create a CSV file with the following columns:
-
-| Column        | Description                                                  | Required                  |
-| ------------- | ------------------------------------------------------------ | ------------------------- |
-| `url`         | URL for the content                           	       | Yes                       |
-| `license`     | License type (must contain "Creative Commons" for filtering) | Yes                       |
-| `magnet_link` | BitTorrent magnet link                                       | Yes (for health checking) |
-
-### Example CSV (`torrents.csv`):
-
-```csv
-url,license,magnet_link
-https://example.com/content1,Creative Commons CC-BY,magnet:?xt=urn:btih:IDFDBHSSHMWIG5PFDAVSRCHZKVAHT66U
-https://example.com/content2,Creative Commons CC0,magnet:?xt=urn:btih:JKME5Y27D4E6SXSQYISKW4FXOWSD5DQG
-```
-
-**Note**: The application only processes entries with Creative Commons licenses. Entries without magnet links will be skipped.
-
+   
 ## Usage
 
-### GUI Mode (Recommended)
+```bash
+python -m healthchecker
+```
 
-Launch the graphical interface:
+Optionally specify a custom IPv8 key file:
 
 ```bash
-python -m healthchecker --gui torrents_template.csv
+python -m healthchecker --key-file /path/to/key.pem
 ```
 
-Or with a custom CSV file path:
+On startup, the service connects to the IPv8 network, waits for peers to propagate torrent content, then opens the GUI dashboard. The default key file is `liberation_key.pem` in the working directory.
 
-```bash
-python -m healthchecker --gui /path/to/your/torrents.csv
-```
+## GUI Dashboard
 
-**GUI Features:**
-
-- Real-time metrics display
-- Statistics dashboard (Total, Healthy, No Peers, Exploding)
-- Sortable table with all metrics
-- Auto-refresh every 30 seconds
-- Start/Stop health checker controls
-- Log window for operations
-
-### Command-Line Mode
-
-Run without GUI:
-
-```bash
-python -m healthchecker torrents_template.csv
-```
-
-### IPV8 Mode
-
-Receive torrents from peers via IPV8 network instead of CSV:
-
-```bash
-python -m healthchecker --mode ipv8
-```
-
-With GUI:
-
-```bash
-python -m healthchecker --mode ipv8 --gui
-```
-
-### Possible Issues
-
-If any case like me you find yourself running this program on Windows (worst OS ever), you may encounter the following error:
-
-```
-ImportError: DLL load failed while importing libtorrent: The specified module could not be found.
-```
-
-Following some discussions on libtorrent issues, I managed to track it to necessary dependencies that for some reason are missing, in particular _libcrypto-1_1-x64.dll_ and _libssl-1_1-x64.dll_, and basically it is necessary to install them manually.
-
-The health checker will:
-
-- Load Creative Commons entries from CSV
-- Randomly select torrents for health checks
-- Query DHT and connect to torrents for detailed stats
-- Calculate growth, shrink, and exploding metrics
-- Store results in SQLite database (`dht_health.db`)
-- Run continuously with 5-minute intervals
-
-**Press Ctrl+C to stop**
+- **Statistics bar**: Total entries, Healthy, No Peers, Exploding counts
+- **Metrics table**: Infohash, seeders, leechers, total peers, growth%, shrink%, exploding score, status, last checked — all columns sortable
+- **Seedbox Fleet**: Connected IPv8 nodes with name, IP, git commit, uptime, disk usage, BTC balance, region, last seen
+- **Log window**: Timestamped operational log
+- **Controls**: Start/Stop health checker, manual Refresh
+- Auto-refreshes every 30 seconds
 
 ## Metrics Explained
 
@@ -216,6 +100,7 @@ Health check results are stored in `dht_health.db` (SQLite database). The databa
 - Calculated metrics (growth, shrink, exploding)
 - Timestamps for each check
 - Source URLs and license information
+- Content received from IPv8 peers
 
 ## Retry Logic
 
@@ -225,51 +110,25 @@ If a DHT query returns no peers:
 2. Retries the health check (up to 3 attempts)
 3. If still no peers after retries, records as "no_peers"
 
-## Troubleshooting
-
-### "CSV file not found"
-
-- Ensure the CSV file path is correct
-- Check that the file exists and is readable
-
-### "No Creative Commons entries available"
-
-- Verify your CSV has entries with "Creative Commons" in the license column
-- Check for typos in license names
-
-### "No peers found"
-
-- This is normal for new or inactive torrents
-- The system will retry automatically
-- Check that magnet links are valid
-
-### GUI doesn't start
-
-- Ensure tkinter is installed: `python -m tkinter` (should open a window)
-- On Linux, you may need: `sudo apt-get install python3-tk`
-
-### libtorrent errors
-
-- Ensure python-libtorrent is properly installed
-- Try: `pip install --upgrade python-libtorrent`
-- Check that you have the correct version for your Python version
-
 ## File Structure
 
 ```
-SwarmHealth/
+torrent_health_and_investment/
 ├── healthchecker/
 │   ├── __init__.py
-│   ├── __main__.py          # Main entry point
-│   ├── client.py            # DHT client and torrent connection
-│   ├── csv_loader.py        # CSV file loading and filtering
-│   ├── db.py                # Database operations
-│   ├── gui.py               # Graphical user interface
-│   ├── metrics.py           # Metrics calculations
-│   └── sampler.py           # Health checker main logic
+│   ├── __main__.py              # Entry point
+│   ├── client.py                # DHT client and torrent connection
+│   ├── db.py                    # Database operations
+│   ├── gui.py                   # GUI dashboard
+│   ├── liberation_community.py  # IPv8 community protocol
+│   ├── liberation_service.py    # IPv8 service lifecycle
+│   ├── metrics.py               # Metrics calculations
+│   └── sampler.py               # Health checker core logic
+├── event_log_server.py          # Mycelium fleet event log server
 ├── requirements.txt
 ├── README.md
-└── torrents_template.csv    # Example CSV format
+├── liberation_key.pem           # IPv8 peer identity key
+├── dht_health.db                # SQLite health check database
 ```
 
 ---

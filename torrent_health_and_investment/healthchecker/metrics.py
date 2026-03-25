@@ -81,8 +81,7 @@ def calculate_exploding_estimator(current_peers: int, previous_samples: List[Dic
     return min(100.0, max(0.0, exploding_score))
 
 
-def calculate_all_metrics(current_peers: int, current_seeders: int, current_leechers: int,
-                           previous_samples: List[Dict]) -> Dict:
+def calculate_all_metrics(current_peers: int, previous_samples: List[Dict]) -> Dict:
     growth = calculate_growth(current_peers, previous_samples)
     shrink = calculate_shrink(current_peers, previous_samples)
     exploding = calculate_exploding_estimator(current_peers, previous_samples)

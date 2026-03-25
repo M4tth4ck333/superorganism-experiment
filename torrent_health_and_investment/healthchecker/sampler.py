@@ -1,6 +1,7 @@
 import json
 import time
 import random
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -9,7 +10,6 @@ from healthchecker.db import (
     get_received_content_for_sampling, mark_content_checked
 )
 from healthchecker.client import DHTClient
-from healthchecker.csv_loader import CSVTorrentLoader, TorrentEntry
 from healthchecker.metrics import calculate_all_metrics
 
 SAMPLE_INTERVAL_SECONDS = 300
@@ -21,52 +21,50 @@ def now_unix() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 
+@dataclass
+class TorrentEntry:
+    url: str
+    license: str
+    magnet_link: Optional[str] = None
+
+    @property
+    def infohash(self) -> Optional[str]:
+        if not self.magnet_link:
+            return None
+        try:
+            parts = self.magnet_link.split("btih:")
+            if len(parts) > 1:
+                return parts[1].split("&")[0]
+        except Exception:
+            pass
+        return None
+
+
 class HealthChecker:
 
-    def __init__(self, csv_path: Optional[str] = None, mode: str = "csv"):
-        self.mode = mode  # "csv" or "ipv8"
-        self.csv_path = csv_path
-        self.csv_loader = None
-
-        if mode == "csv":
-            if not csv_path:
-                raise ValueError("csv_path is required for csv mode")
-            self.csv_loader = CSVTorrentLoader(csv_path)
-
+    def __init__(self):
         self.dht_client = DHTClient()
 
     def initialize(self):
         init_db()
         self.dht_client.bootstrap()
-
-        if self.mode == "csv":
-            print("Loading CSV file...")
-            count = self.csv_loader.load()
-            print(f"Loaded {count} total entries, {len(self.csv_loader.entries)} entries with magnet links")
-        else:
-            # IPV8 mode - check how many entries are in the database
-            entries = get_received_content_for_sampling(limit=1000)
-            print(f"IPV8 mode: {len(entries)} entries available from received content")
+        entries = get_received_content_for_sampling(limit=1000)
+        print(f"IPv8 mode: {len(entries)} entries available from received content")
 
     def get_next_entry(self) -> Optional[TorrentEntry]:
-        """Get the next entry to health-check based on mode."""
-        if self.mode == "ipv8":
-            entries = get_received_content_for_sampling(limit=10)
-            if not entries:
-                return None
-            selected = random.choice(entries)
-            return TorrentEntry(
-                url=selected['url'],
-                license=selected['license'],
-                magnet_link=selected['magnet_link']
-            )
-        else:  # csv mode
-            return self.csv_loader.get_random_cc_entry()
-    
+        entries = get_received_content_for_sampling(limit=10)
+        if not entries:
+            return None
+        selected = random.choice(entries)
+        return TorrentEntry(
+            url=selected['url'],
+            license=selected['license'],
+            magnet_link=selected['magnet_link']
+        )
+
     def check_torrent_health(self, entry: TorrentEntry) -> dict:
         infohash = entry.infohash
-        
-        # If no magnet link or infohash, skip this entry
+
         if not infohash or not entry.magnet_link:
             print(f"No magnet link for {entry.url}, skipping...")
             return {
@@ -78,53 +76,41 @@ class HealthChecker:
                 "status": "no_magnet",
                 "entry": entry
             }
-        
-        dht_count, peers = 0, []
-        
-        # Get detailed stats (seeders, leechers) by connecting to the torrent
+
         detailed_stats = self.dht_client.get_detailed_stats(entry.magnet_link, timeout=10.0)
-        
+
         seeders = detailed_stats.get("seeders", 0)
         leechers = detailed_stats.get("leechers", 0)
-        total_peers = detailed_stats.get("total_peers", 0) or dht_count
-        
-        # Get previous samples to calculate growth/shrink/exploding
+        total_peers = detailed_stats.get("total_peers", 0)
+
         previous_samples = get_previous_samples(infohash, limit=10)
-        
-        # Calculate metrics
-        metrics = calculate_all_metrics(total_peers, seeders, leechers, previous_samples)
-        
+        metrics = calculate_all_metrics(total_peers, previous_samples)
+
         return {
             "infohash": infohash,
-            "peers": dht_count,
+            "peers": total_peers,
             "seeders": seeders,
             "leechers": leechers,
             "total_peers": total_peers,
             "growth": metrics["growth"],
             "shrink": metrics["shrink"],
             "exploding_estimator": metrics["exploding_estimator"],
-            "peers_list": peers,
+            "peers_list": [],
             "status": "healthy" if total_peers > 0 else "no_peers",
             "entry": entry
         }
-    
+
     def run_once(self):
-        # Get next entry based on mode
         entry = self.get_next_entry()
         if not entry:
-            if self.mode == "ipv8":
-                print("No entries available from IPV8 received content!")
-            else:
-                print("No entries available from CSV!")
+            print("No entries available from IPv8 received content!")
             return
 
         print(f"\n[{datetime.now()}] Checking: {entry.url}")
         print(f"  License: {entry.license}")
 
-        # Perform health check
         health = self.check_torrent_health(entry)
 
-        # Record in database
         ts = now_unix()
         insert_sample(
             infohash_hex=health["infohash"] or "",
@@ -142,31 +128,23 @@ class HealthChecker:
             exploding_estimator=health.get("exploding_estimator", 0.0)
         )
 
-        # Mark content as checked if in IPV8 mode
-        if self.mode == "ipv8" and health["infohash"]:
+        if health["infohash"]:
             mark_content_checked(health["infohash"], ts)
 
         print(f"  Result: {health.get('total_peers', 0)} total peers ({health.get('seeders', 0)} seeders, {health.get('leechers', 0)} leechers)")
         print(f"  Metrics: Growth={health.get('growth', 0.0):.2f}%, Shrink={health.get('shrink', 0.0):.2f}%, Exploding={health.get('exploding_estimator', 0.0):.2f}")
 
         return health
-    
+
     def run_continuous(self):
         self.initialize()
-        
+
         print(f"\nStarting continuous health checks (interval: {SAMPLE_INTERVAL_SECONDS}s)")
         print("Press Ctrl+C to stop\n")
-        
+
         try:
             while True:
                 self.run_once()
                 time.sleep(SAMPLE_INTERVAL_SECONDS)
         except KeyboardInterrupt:
             print("\n\nStopping health checker...")
-
-
-def run(csv_path: Optional[str] = None, mode: str = "csv"):
-    if mode == "csv" and not csv_path:
-        csv_path = "torrents.csv"
-    checker = HealthChecker(csv_path=csv_path, mode=mode)
-    checker.run_continuous()
