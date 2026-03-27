@@ -1,7 +1,1 @@
-libtorrent>=2.0.11
-beautifulsoup4>=4.14.3
-aiohttp>=3.13.2
-bencodepy>=0.9.5
-ttkbootstrap>=1.19.2
-flask>=3.0.0
-pyipv8==3.1.0
+flask
