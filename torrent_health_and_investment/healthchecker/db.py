@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, Set, List, Dict
 
-DB_PATH = Path("dht_health.db")
+DB_PATH = Path(__file__).parent.parent / "dht_health.db"
 
 def get_con():
     con = sqlite3.connect(DB_PATH)

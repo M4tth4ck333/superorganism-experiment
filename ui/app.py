@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 from uuid import uuid4, UUID
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
@@ -27,8 +27,13 @@ from democracy.storage.issue_reposiory import IssueRepository
 from democracy.storage.json_store import JSONStore
 from ui.models.issue_draft import IssueDraft
 from ui.widgets.create_issue_overlay import CreateIssueOverlay
+from ui.widgets.fleet_widget import FleetWidget
 from ui.widgets.issue_details import IssueDetailWidget
 from ui.widgets.issue_table import IssueTableWidget
+from ui.widgets.torrents_widget import TorrentsWidget
+
+if TYPE_CHECKING:
+    from healthchecker.health_thread import TorrentHealthThread
 
 
 class Application(QMainWindow):
@@ -53,6 +58,7 @@ class Application(QMainWindow):
         vote_store: JSONStore[Vote],
         broadcast_new_issue: Callable[[Issue], None],
         broadcast_new_vote: Callable[[Vote], None],
+        health_thread: TorrentHealthThread,
         parent: Optional[QWidget] = None
     ):
         super().__init__(parent)
@@ -65,6 +71,7 @@ class Application(QMainWindow):
 
         self.broadcast_new_issue = broadcast_new_issue
         self.broadcast_new_vote = broadcast_new_vote
+        self._health_thread = health_thread
 
         self.setWindowTitle("Democracy")
         self.resize(1360, 820)
@@ -94,13 +101,26 @@ class Application(QMainWindow):
         self.issue_detail_page.solution_voted.connect(self._on_solution_vote)
         self.issue_detail_page.solution_details_requested.connect(self._on_solution_details)
 
+        self.torrents_page = TorrentsWidget()
+        self.fleet_page = FleetWidget()
+
         self.content_stack.addWidget(self.dashboard_page)
         self.content_stack.addWidget(self.issue_detail_page)
+        self.content_stack.addWidget(self.torrents_page)
+        self.content_stack.addWidget(self.fleet_page)
 
         root_layout.addWidget(sidebar)
         root_layout.addWidget(self.content_stack, 1)
 
         self.content_stack.setCurrentWidget(self.dashboard_page)
+
+        self.dashboard_btn.clicked.connect(self._show_dashboard_page)
+        self.torrents_btn.clicked.connect(self._show_torrents_page)
+        self.fleet_btn.clicked.connect(self._show_fleet_page)
+
+        health_thread.dataChanged.connect(
+            self._on_health_data_changed, type=Qt.ConnectionType.QueuedConnection
+        )
 
         self.create_issue_overlay = CreateIssueOverlay(root)
         self.create_issue_overlay.created.connect(self._on_create)
@@ -140,7 +160,8 @@ class Application(QMainWindow):
         layout.setContentsMargins(18, 90, 18, 18)
         layout.setSpacing(12)
 
-        self.seedboxes_btn = QPushButton("Seedboxes")
+        self.torrents_btn = QPushButton("Torrents")
+        self.fleet_btn = QPushButton("Fleet")
 
         self.dashboard_btn = QPushButton("Dashboard")
         self.dashboard_btn.setObjectName("navActive")
@@ -150,6 +171,8 @@ class Application(QMainWindow):
         self.settings_btn = QPushButton("Settings")
 
         for btn in [
+            self.torrents_btn,
+            self.fleet_btn,
             self.dashboard_btn,
             self.my_proposals_btn,
             self.voting_history_btn,
@@ -157,7 +180,8 @@ class Application(QMainWindow):
         ]:
             btn.setCursor(Qt.CursorShape.PointingHandCursor if hasattr(__import__("PyQt6.QtCore").QtCore, "Qt") else btn.cursor())
 
-        layout.addWidget(self.seedboxes_btn)
+        layout.addWidget(self.torrents_btn)
+        layout.addWidget(self.fleet_btn)
         layout.addWidget(self.dashboard_btn)
         layout.addWidget(self.my_proposals_btn)
         layout.addWidget(self.voting_history_btn)
@@ -402,7 +426,15 @@ class Application(QMainWindow):
     def _on_solution_details(self, issue_id: UUID, solution_id: str) -> None:
         print(f"Open details for solution {solution_id} of issue {issue_id}")
 
+    def _set_active_nav(self, active_btn: QPushButton) -> None:
+        for btn in (self.dashboard_btn, self.torrents_btn, self.fleet_btn,
+                    self.my_proposals_btn, self.voting_history_btn, self.settings_btn):
+            btn.setObjectName("navActive" if btn is active_btn else "nav")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
     def _show_dashboard_page(self) -> None:
+        self._set_active_nav(self.dashboard_btn)
         self.content_stack.setCurrentWidget(self.dashboard_page)
 
     def _show_issue_detail_page(self, issue_id: UUID) -> None:
@@ -414,4 +446,17 @@ class Application(QMainWindow):
             issue,
             self._mock_solutions_for_issue(issue.issue),
         )
+        self._set_active_nav(self.dashboard_btn)
         self.content_stack.setCurrentWidget(self.issue_detail_page)
+
+    def _show_torrents_page(self) -> None:
+        self._set_active_nav(self.torrents_btn)
+        self.content_stack.setCurrentWidget(self.torrents_page)
+
+    def _show_fleet_page(self) -> None:
+        self._set_active_nav(self.fleet_btn)
+        self.content_stack.setCurrentWidget(self.fleet_page)
+
+    def _on_health_data_changed(self) -> None:
+        self.torrents_page.load(self._health_thread.get_torrent_data())
+        self.fleet_page.load(self._health_thread.get_fleet_data())

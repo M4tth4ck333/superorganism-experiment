@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).parent / "torrent_health_and_investment"))
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
@@ -13,6 +15,8 @@ from democracy.models.person import Person
 from democracy.models.vote import Vote
 from democracy.network.ipv8_thread import IPv8Thread
 from democracy.storage.json_store import JSONStore
+from healthchecker.db import init_db
+from healthchecker.health_thread import TorrentHealthThread
 from ui.app import Application
 
 # -----------------------------
@@ -37,6 +41,14 @@ def main() -> None:
     # --- UI creation (main thread) ---
     app = QApplication(sys.argv)
 
+    # --- Torrent health ---
+    init_db()
+    KEY_FILE = str(Path(__file__).parent / "torrent_health_and_investment" / "liberation_key.pem")
+    health_thread = TorrentHealthThread(key_file=KEY_FILE)
+    health_thread.error.connect(lambda msg: print("Health error:", msg))
+    health_thread.startedOk.connect(lambda: print("Health thread started"))
+    health_thread.start()
+
     worker: Optional[IPv8Thread] = None
 
     def broadcast_new_issue(e: Issue) -> None:
@@ -47,7 +59,7 @@ def main() -> None:
         if worker is not None:
             worker.broadcastVote.emit(v)
 
-    window = Application(user, issue_store, vote_store, broadcast_new_issue, broadcast_new_vote)
+    window = Application(user, issue_store, vote_store, broadcast_new_issue, broadcast_new_vote, health_thread)
 
     # Start IPv8 in QThread
     worker = IPv8Thread(user.id, issue_store, vote_store)
@@ -62,6 +74,8 @@ def main() -> None:
         sys.exit(app.exec())
     finally:
         # Stop the background loop when the application exits
+        health_thread.stop()
+        health_thread.wait(1000)
         if worker is not None:
             worker.stop()
             worker.wait(1000)

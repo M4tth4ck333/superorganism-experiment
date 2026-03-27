@@ -1,2 +1,5 @@
-pyipv8
+pyipv8==3.1.0
 PyQt6
+libtorrent>=2.0.11
+aiohttp>=3.13.2
+bencodepy>=0.9.5
