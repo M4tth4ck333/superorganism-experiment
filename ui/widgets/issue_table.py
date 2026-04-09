@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPainter
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPainter
+from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QTableView,
@@ -47,8 +47,8 @@ class ProgressDelegate(QStyledItemDelegate):
 
 
 class IssueTableWidget(QWidget):
-    selected = pyqtSignal(UUID)
-    activated = pyqtSignal(UUID)
+    selected = Signal(object)
+    activated = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

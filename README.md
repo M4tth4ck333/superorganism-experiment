@@ -37,6 +37,14 @@ Marcel: P2P search with [decentralized relevance ranking](https://github.com/mg9
 
 other ideas: Bounties, seedbox fleet? status of IPv8 network? Money in system, amount of discovered users?
 
+## General
+
+All resources are listed in the [resources/](resources/) directory, including icons, datasets, and other assets. They must be converted using the PySide6 resource compiler. Run the following command after adding new resources:
+
+```bash
+pyside6-rcc resources.qrc -o resources_rc.py
+```
+
 ## Mycelium
 
 Autonomous BitTorrent orchestrator that seeds Creative Commons content.

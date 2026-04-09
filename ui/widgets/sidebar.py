@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QPushButton,
@@ -12,13 +12,13 @@ from PyQt6.QtWidgets import (
 
 
 class SidebarWidget(QFrame):
-    torrents_clicked = pyqtSignal()
-    fleet_clicked = pyqtSignal()
-    issues_clicked = pyqtSignal()
-    my_issues_clicked = pyqtSignal()
-    voting_history_clicked = pyqtSignal()
-    settings_clicked = pyqtSignal()
-    create_clicked = pyqtSignal()
+    torrents_clicked = Signal()
+    fleet_clicked = Signal()
+    issues_clicked = Signal()
+    my_issues_clicked = Signal()
+    voting_history_clicked = Signal()
+    settings_clicked = Signal()
+    create_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

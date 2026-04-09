@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PyQt6.QtGui import QColor
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QColor
 
 from democracy.constants import ISSUE_THRESHOLD
 from democracy.models.DTOs.issue_with_votes import IssueWithVotes

@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -20,11 +20,11 @@ from ui.widgets.issue_table import IssueTableWidget
 
 
 class IssuesOverviewWidget(QWidget):
-    create_clicked = pyqtSignal()
-    search_changed = pyqtSignal(str)
-    filter_changed = pyqtSignal(str)
-    issue_selected = pyqtSignal(UUID)
-    issue_activated = pyqtSignal(UUID)
+    create_clicked = Signal()
+    search_changed = Signal(str)
+    filter_changed = Signal(str)
+    issue_selected = Signal(object)
+    issue_activated = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

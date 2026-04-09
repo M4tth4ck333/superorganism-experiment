@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union, Deque
 from uuid import UUID
 
-from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QThread, Signal, Slot
 
 from ipv8.configuration import ConfigBuilder, default_bootstrap_defs, Strategy, WalkerDefinition
 from ipv8_service import IPv8
@@ -31,15 +31,15 @@ class IPv8Thread(QThread):
       - GUI -> Thread: broadcastIssue(Issue), broadcastVote(Vote)
       - Thread -> GUI: dataChanged(), startedOk(), error(str)
     """
-    dataChanged = pyqtSignal()
-    startedOk = pyqtSignal()
-    error = pyqtSignal(str)
+    dataChanged = Signal()
+    startedOk = Signal()
+    error = Signal(str)
 
     # GUI -> worker signals
-    broadcastIssue = pyqtSignal(object)         # Issue
-    broadcastIssueVote = pyqtSignal(object)     # Issue vote
-    broadcastSolution = pyqtSignal(object)      # Solution
-    broadcastSolutionVote = pyqtSignal(object)  # Solution vote
+    broadcastIssue = Signal(object)         # Issue
+    broadcastIssueVote = Signal(object)     # Issue vote
+    broadcastSolution = Signal(object)      # Solution
+    broadcastSolutionVote = Signal(object)  # Solution vote
 
     def __init__(
         self,
@@ -182,7 +182,7 @@ class IPv8Thread(QThread):
     # -----------------------
     # GUI -> worker slots
     # -----------------------
-    @pyqtSlot(object)
+    @Slot(object)
     def _on_broadcast_issue(self, issue: Issue) -> None:
         """
         Runs in GUI thread when signal emitted, but executes in worker thread
@@ -201,7 +201,7 @@ class IPv8Thread(QThread):
 
         asyncio.run_coroutine_threadsafe(_do(), self._loop)
 
-    @pyqtSlot(object)
+    @Slot(object)
     def _on_broadcast_issue_vote(self, vote: IssueVote) -> None:
         if self._loop is None:
             return
@@ -215,7 +215,7 @@ class IPv8Thread(QThread):
 
         asyncio.run_coroutine_threadsafe(_do(), self._loop)
 
-    @pyqtSlot(object)
+    @Slot(object)
     def _on_broadcast_solution(self, solution: Solution) -> None:
         if self._loop is None:
             return
@@ -229,7 +229,7 @@ class IPv8Thread(QThread):
 
         asyncio.run_coroutine_threadsafe(_do(), self._loop)
 
-    @pyqtSlot(object)
+    @Slot(object)
     def _on_broadcast_solution_vote(self, vote: SolutionVote) -> None:
         if self._loop is None:
             return
