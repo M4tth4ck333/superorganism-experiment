@@ -17,3 +17,8 @@ SOLUTION_TITLE_MAX_LENGTH: Final[int] = 100
 
 SOLUTION_DESCRIPTION_MIN_LENGTH: Final[int] = 100
 SOLUTION_DESCRIPTION_MAX_LENGTH: Final[int] = 5000
+
+# =========================================================
+# EXTERNAL LINKS
+# =========================================================
+WHITEPAPER_URL: Final[str] = "https://github.com/Tribler/superorganism-experiment"

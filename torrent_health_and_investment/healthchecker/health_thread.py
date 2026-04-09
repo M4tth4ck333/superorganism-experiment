@@ -5,16 +5,16 @@ import threading
 import time
 from typing import Optional
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from healthchecker.liberation_service import LiberationService
 from healthchecker.sampler import HealthChecker
 
 
 class TorrentHealthThread(QThread):
-    dataChanged = pyqtSignal()
-    startedOk = pyqtSignal()
-    error = pyqtSignal(str)
+    dataChanged = Signal()
+    startedOk = Signal()
+    error = Signal(str)
 
     def __init__(self, key_file: str, parent=None):
         super().__init__(parent)

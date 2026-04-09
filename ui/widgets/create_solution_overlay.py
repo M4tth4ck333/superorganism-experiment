@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal, Qt, QEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Signal, Qt, QEvent
+from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -22,8 +22,8 @@ from ui.widgets.create_issue_overlay import FieldBlock, ButtonBlock
 
 
 class CreateSolutionOverlay(QWidget):
-    created = pyqtSignal(SolutionDraft)
-    closed = pyqtSignal()
+    created = Signal(object)
+    closed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

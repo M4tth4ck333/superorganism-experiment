@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QPushButton,
@@ -20,7 +20,7 @@ from democracy.models.DTOs.solution_with_votes import SolutionWithVotes
 
 
 class SolutionVotePanel(QFrame):
-    voted = pyqtSignal()
+    voted = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -92,7 +92,7 @@ class SolutionVotePanel(QFrame):
 
 
 class CodeVerificationCard(QFrame):
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -144,9 +144,9 @@ class CodeVerificationCard(QFrame):
 
 
 class SolutionDetailWidget(QWidget):
-    back_clicked = pyqtSignal()
-    voted = pyqtSignal(UUID)
-    code_verification_clicked = pyqtSignal(UUID)
+    back_clicked = Signal()
+    voted = Signal(object)
+    code_verification_clicked = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

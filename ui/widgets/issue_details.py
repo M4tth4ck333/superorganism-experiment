@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QPushButton,
@@ -51,8 +51,8 @@ class VotePanel(QFrame):
 
 
 class SolutionCard(QFrame):
-    voted = pyqtSignal(UUID)
-    details_requested = pyqtSignal(UUID)
+    voted = Signal(object)
+    details_requested = Signal(object)
 
     def __init__(self, solution_with_votes: SolutionWithVotes, parent: QWidget | None = None):
         super().__init__(parent)
@@ -143,11 +143,11 @@ class SolutionCard(QFrame):
 
 
 class IssueDetailWidget(QWidget):
-    back_clicked = pyqtSignal()
-    approved = pyqtSignal(UUID)
-    open_create_solution = pyqtSignal(UUID)
-    solution_voted = pyqtSignal(UUID, UUID)
-    solution_details_requested = pyqtSignal(UUID, UUID)
+    back_clicked = Signal()
+    approved = Signal(object)
+    open_create_solution = Signal(object)
+    solution_voted = Signal(object, object)
+    solution_details_requested = Signal(object, object)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

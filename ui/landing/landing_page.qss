@@ -1,0 +1,333 @@
+QWidget#landingPageRoot {
+    background-color: #0e0e0e;
+    color: #ffffff;
+    font-family: "Inter";
+}
+
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+
+QWidget#landingNavBar {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#landingBrand {
+    color: #b6a0ff;
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: -0.8px;
+}
+
+/* =========================================================
+   NAV BUTTONS
+========================================================= */
+
+QWidget#landingNavBar QPushButton[variant="landing-nav-link"] {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    color: #adaaaa;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 10px 12px;
+}
+
+QWidget#landingNavBar QPushButton[variant="landing-nav-link"]:hover {
+    color: #7c4dff;
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+QPushButton#navJoinButton {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #7e51ff,
+        stop:1 #b6a0ff
+    );
+    color: #14052f;
+    border: 1px solid transparent;
+    border-radius: 22px;
+    font-size: 14px;
+    font-weight: 800;
+    padding: 10px 22px;
+}
+
+QPushButton#navJoinButton:hover {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #8b5cf6,
+        stop:1 #c4b5fd
+    );
+}
+
+QPushButton#navJoinButton:pressed {
+    padding-top: 13px;
+    padding-bottom: 11px;
+}
+
+/* =========================================================
+   SHARED PRIMARY BUTTONS
+========================================================= */
+
+QPushButton[variant="landing-primary"],
+QPushButton[variant="landing-primary-hero"] {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #7e51ff,
+        stop:1 #b6a0ff
+    );
+    color: #14052f;
+    border: 1px solid transparent;
+    font-weight: 800;
+}
+
+QPushButton[variant="landing-primary"] {
+    border-radius: 22px;
+    padding: 12px 22px;
+    font-size: 14px;
+}
+
+QPushButton[variant="landing-primary-hero"],
+QPushButton[variant="landing-secondary-hero"] {
+    border-radius: 26px;
+    min-height: 56px;
+    max-height: 56px;
+    padding: 0 30px;
+    font-size: 16px;
+}
+
+QPushButton[variant="landing-primary-hero"] {
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+QPushButton[variant="landing-primary"]:hover,
+QPushButton[variant="landing-primary-hero"]:hover {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #8b5cf6,
+        stop:1 #c4b5fd
+    );
+}
+
+QPushButton[variant="landing-secondary-hero"] {
+    background-color: transparent;
+    color: #ffffff;
+    border: 1px solid rgba(72, 72, 71, 0.7);
+    font-weight: 700;
+}
+
+QPushButton[variant="landing-secondary-hero"]:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+QFrame#heroSection {
+    min-height: 900px;
+    background-color: #0e0e0e;
+}
+
+QLabel#heroBackground {
+    background-color: #0e0e0e;
+}
+
+QWidget#heroOverlay {
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0.00 rgba(14, 14, 14, 70),
+        stop:0.35 rgba(14, 14, 14, 120),
+        stop:0.65 rgba(14, 14, 14, 190),
+        stop:0.82 rgba(14, 14, 14, 235),
+        stop:1.00 rgba(14, 14, 14, 255)
+    );
+}
+
+QLabel#heroKicker {
+    color: #b6a0ff;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 5px;
+    text-transform: uppercase;
+}
+
+QLabel#heroTitle {
+    color: #ffffff;
+    font-size: 96px;
+    font-weight: 900;
+}
+
+QLabel#heroTitle .gradient {
+    color: #b6a0ff;
+}
+
+QLabel#heroSubtitle {
+    color: #adaaaa;
+    font-size: 24px;
+    font-weight: 500;
+    line-height: 1.4;
+    max-width: 900px;
+}
+
+QFrame#pricingSection {
+    background-color: #0e0e0e;
+}
+
+QFrame#faqSection {
+    background-color: #000000;
+}
+
+QLabel#sectionKicker {
+    color: #b6a0ff;
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+}
+
+QLabel#sectionTitle {
+    color: #ffffff;
+    font-size: 46px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: -0.6px;
+}
+
+QFrame#sectionAccentLine {
+    background-color: #7e51ff;
+    border-radius: 2px;
+}
+
+QFrame[variant="pricing-card"] {
+    background-color: #131313;
+    border: 1px solid rgba(72, 72, 71, 0.28);
+    border-radius: 16px;
+}
+
+QFrame[variant="pricing-card"][highlighted="true"] {
+    background-color: #262626;
+    border: 2px solid #b6a0ff;
+}
+
+QLabel#pricingBadge {
+    background-color: #b6a0ff;
+    color: #14052f;
+    border-radius: 10px;
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+QLabel#pricingPlan {
+    color: #adaaaa;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+QLabel#pricingPlan[highlighted="true"] {
+    color: #b6a0ff;
+}
+
+QLabel#pricingPrice {
+    color: #ffffff;
+    font-size: 56px;
+    font-weight: 900;
+}
+
+QLabel#pricingSuffix {
+    color: #adaaaa;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QLabel#pricingNote {
+    color: #a98fff;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+QLabel#featureBullet {
+    color: #b6a0ff;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+QLabel#featureText {
+    color: #d1d5db;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+QPushButton[variant="landing-plan"] {
+    background-color: transparent;
+    color: #ffffff;
+    border: 1px solid rgba(72, 72, 71, 0.7);
+    border-radius: 12px;
+    padding: 14px 20px;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+QPushButton[variant="landing-plan"]:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+QFrame[variant="faq-item"] {
+    background-color: #1a1a1a;
+    border: 1px solid rgba(72, 72, 71, 0.28);
+    border-radius: 16px;
+}
+
+QToolButton#faqQuestion {
+    background-color: transparent;
+    border: none;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 800;
+    text-align: left;
+    padding: 0;
+}
+
+QLabel#faqAnswer {
+    color: #adaaaa;
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.6;
+}
+
+QFrame#landingFooter {
+    background-color: #000000;
+    border-top: 1px solid rgba(38, 38, 38, 0.6);
+}
+
+QLabel#footerBrand {
+    color: #7c4dff;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: -0.4px;
+}
+
+QPushButton[variant="footer-link"] {
+    background-color: transparent;
+    border: none;
+    color: #adaaaa;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 4px 0;
+}
+
+QPushButton[variant="footer-link"]:hover {
+    color: #7c4dff;
+}
+
+QLabel#footerRights {
+    color: #adaaaa;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+}

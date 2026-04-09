@@ -3,9 +3,9 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QSortFilterProxyModel
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QSortFilterProxyModel
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
     QApplication,
     QWidget,
     QVBoxLayout,

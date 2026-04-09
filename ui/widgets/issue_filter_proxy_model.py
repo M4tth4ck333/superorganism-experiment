@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QSortFilterProxyModel, QModelIndex
+from PySide6.QtCore import QSortFilterProxyModel, QModelIndex
 
 
 class IssueFilterProxyModel(QSortFilterProxyModel):

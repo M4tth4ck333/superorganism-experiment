@@ -6,8 +6,8 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent / "torrent_health_and_investment"))
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from config import DATA_PATH
 from democracy.models.issue import Issue
