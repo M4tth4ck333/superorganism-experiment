@@ -236,9 +236,40 @@ class Deployer:
         with SCPClient(self.client.get_transport()) as scp:
             scp.get(remote_path, local_path)
 
+    def _wait_for_apt_lock(self, timeout: int = 300) -> None:
+        """Wait for apt/dpkg locks to be released (e.g. after fresh VPS boot)."""
+        logger.info("Waiting for apt lock...")
+        self.run_command(
+            f"timeout {timeout} bash -c "
+            f"'while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock "
+            f"/var/lib/dpkg/lock >/dev/null 2>&1; do sleep 3; done'",
+            timeout=timeout + 10,
+        )
+
+    def _configure_github_access(self) -> None:
+        """On IPv6-only VPS, add /etc/hosts overrides for the GitHub IPv6 proxy."""
+        if ':' not in (self.host or ''):
+            return  # IPv4 host — direct access works fine
+        logger.info("IPv6-only VPS: configuring GitHub IPv6 proxy via /etc/hosts...")
+        self.run_command(
+            "grep -q 'github-ipv6-proxy' /etc/hosts || "
+            "printf '\\n# GitHub IPv6 proxy (danwin1210.de)\\n"
+            "2a01:4f8:c010:d56::2 github.com\\n"
+            "2a01:4f8:c010:d56::3 api.github.com\\n"
+            "2a01:4f8:c010:d56::4 codeload.github.com\\n"
+            "2a01:4f8:c010:d56::6 ghcr.io\\n"
+            "2a01:4f8:c010:d56::8 uploads.github.com\\n"
+            "2606:50c0:8000::133 objects.githubusercontent.com\\n"
+            "' >> /etc/hosts"
+        )
+
     def install_dependencies(self) -> None:
         """Install system dependencies (Python3, pip, git, libsodium-dev)."""
         logger.info("Installing system dependencies...")
+
+        self._configure_github_access()
+
+        self._wait_for_apt_lock()
         self.run_command("apt-get update -y", timeout=120)
 
         packages = [
@@ -249,6 +280,7 @@ class Deployer:
             "libsodium-dev",
             "build-essential",
             "ffmpeg",
+            "unzip",
         ]
 
         self.run_command(
@@ -277,6 +309,7 @@ class Deployer:
         self.run_command("ufw allow 22/tcp comment 'SSH'")
         self.run_command("ufw allow 6881:6889/udp comment 'BitTorrent DHT'")
         self.run_command("ufw allow 6881:6999/tcp comment 'BitTorrent'")
+        self.run_command("ufw allow 8090/udp comment 'IPv8'")
 
         if extra_ports:
             for port in extra_ports:
@@ -379,6 +412,13 @@ class Deployer:
         """Return True if the SporeStack token has already been deployed."""
         _, _, exit_code = self.run_command(
             f"test -f {self.REMOTE_DATA_DIR}/sporestack_token", check=False
+        )
+        return exit_code == 0
+
+    def video_ids_deployed(self) -> bool:
+        """Return True if the video IDs file has already been deployed."""
+        _, _, exit_code = self.run_command(
+            f"test -f {self.REMOTE_VIDEO_IDS_FILE}", check=False
         )
         return exit_code == 0
 

@@ -1,0 +1,15 @@
+{
+  "provider": "sporestack_eu",
+  "flavor": "sporestack-eu-4gb",
+  "region": "amsterdam",
+  "os": "ubuntu-24.04",
+  "days": 30,
+  "billing_cycle": "monthly",
+  "hostname": "mycelium",
+  "ssh_key_path": "~/.mycelium/ssh/deploy_key",
+  "token_file": "~/.mycelium/sporestack_token",
+  "server_info_file": "~/.mycelium/server.json",
+  "known_hosts_file": "~/.mycelium/known_hosts",
+  "log_endpoint_file": "~/.mycelium/log_endpoint",
+  "log_secret_file": "~/.mycelium/log_secret"
+}

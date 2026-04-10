@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from lib.config import CFG
 from lib.provisioner import SporeStackClient, SporeStackError
 from lib.wallet import BitcoinWallet, InsufficientFundsError, WalletError
 
@@ -16,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN_FILE = Path.home() / ".mycelium" / "sporestack_token"
+TOKEN_FILE = CFG["token_file"]
 
 
 def parse_bitcoin_uri(payment_uri: str) -> tuple[str, float] | None:

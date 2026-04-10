@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from lib.config import CFG
 from lib.deployer import Deployer, DeployerError
 from lib.wallet import BitcoinWallet
 
@@ -18,11 +19,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SERVER_INFO_FILE = Path.home() / ".mycelium" / "server.json"
-LOG_ENDPOINT_FILE = Path.home() / ".mycelium" / "log_endpoint"
-LOG_SECRET_FILE = Path.home() / ".mycelium" / "log_secret"
-SPORESTACK_TOKEN_FILE = Path.home() / ".mycelium" / "sporestack_token"
-DEFAULT_SSH_KEY_PATH = Path.home() / ".mycelium" / "ssh" / "deploy_key"
+SERVER_INFO_FILE = CFG["server_info_file"]
+LOG_ENDPOINT_FILE = CFG["log_endpoint_file"]
+LOG_SECRET_FILE = CFG["log_secret_file"]
+SPORESTACK_TOKEN_FILE = CFG["token_file"]
+DEFAULT_SSH_KEY_PATH = CFG["ssh_key_path"]
 DEFAULT_VIDEO_IDS_FILE = Path(__file__).parent / "yt-api-cc-scripts" / "cc_video_ids.txt"
 DEFAULT_COOKIES_FILE = Path(__file__).parent / "yt_cookies.txt"
 
@@ -99,8 +100,11 @@ def deploy(
         deployer.deploy_mycelium()
 
         if DEFAULT_VIDEO_IDS_FILE.exists():
-            logger.info(f"Uploading video IDs file...")
-            deployer.deploy_video_ids(str(DEFAULT_VIDEO_IDS_FILE))
+            if deployer.video_ids_deployed():
+                logger.info("Video IDs already on VPS, skipping upload")
+            else:
+                logger.info("Uploading video IDs file...")
+                deployer.deploy_video_ids(str(DEFAULT_VIDEO_IDS_FILE))
         else:
             logger.warning(f"Video IDs file not found at {DEFAULT_VIDEO_IDS_FILE}, skipping")
 
@@ -130,7 +134,8 @@ def deploy(
         print("=" * 60)
         print("DEPLOYMENT COMPLETE!")
         print("=" * 60)
-        print(f"SSH: ssh -i {key_path} root@{host}")
+        ssh_host = f"{host}" if ":" in host else host
+        print(f"SSH: ssh -i {key_path} root@{ssh_host}")
         print()
         print("Streaming orchestrator logs (Ctrl+C to exit)...")
         print("=" * 60)
@@ -144,11 +149,12 @@ def deploy(
 
     # Stream logs - this replaces the Python process
     known_hosts = str(Path.home() / ".mycelium" / "known_hosts")
+    ssh_host = f"{host}" if ":" in host else host
     os.execvp("ssh", [
         "ssh", "-i", key_path,
         "-o", "StrictHostKeyChecking=yes",
         "-o", f"UserKnownHostsFile={known_hosts}",
-        f"root@{host}",
+        f"root@{ssh_host}",
         "tail", "-f", "/root/logs/orchestrator.log"
     ])
 
@@ -181,7 +187,7 @@ Examples:
     if not host:
         info = load_server_info()
         if info:
-            host = info.get("ipv4") or info.get("host")
+            host = info.get("host") or info.get("ipv4")
             ssh_port = info.get("ssh_port", ssh_port)
             ssh_key = ssh_key or info.get("ssh_key_path")
             logger.info(f"Using saved server: {host}:{ssh_port}")
