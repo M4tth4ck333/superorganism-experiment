@@ -7,8 +7,13 @@ from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
+from healthchecker.db import purge_stale_entries
 from healthchecker.liberation_service import LiberationService
-from healthchecker.sampler import HealthChecker
+from healthchecker.sampler import HealthChecker, now_unix
+
+_STALE_CONTENT_THRESHOLD_SECONDS = 3600  # 1 hour without re-announcement → stale
+_PURGE_INTERVAL_CYCLES = 12              # purge every 12 × 300s = 1 hour
+_DHT_SAMPLES_KEEP = 30                   # max samples kept per infohash
 
 
 class TorrentHealthThread(QThread):
@@ -95,12 +100,22 @@ class TorrentHealthThread(QThread):
             self.error.emit(f"HealthChecker init failed: {e}")
             return
 
+        cycle = 0
         while not self._stop_event.is_set():
             try:
                 checker.run_once()
                 self.dataChanged.emit()
             except Exception as e:
                 print(f"HealthChecker error: {e}")
+
+            cycle += 1
+            if cycle % _PURGE_INTERVAL_CYCLES == 0:
+                cutoff = now_unix() - _STALE_CONTENT_THRESHOLD_SECONDS
+                removed = purge_stale_entries(cutoff, keep_samples=_DHT_SAMPLES_KEEP)
+                if removed:
+                    print(f"[Purge] Removed {removed} stale entries")
+                    self.dataChanged.emit()
+
             # Sleep 300s but wake immediately if stop() is called
             self._stop_event.wait(300)
 

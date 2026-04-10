@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
 import aiohttp
 from ipv8.configuration import ConfigBuilder, Strategy, WalkerDefinition, default_bootstrap_defs
@@ -41,9 +41,6 @@ class LiberationAnnouncer:
         self.key_file = key_file or str(Config.DATA_DIR / "liberation_key.pem")
         self.ipv8: Optional[IPv8] = None
         self.community: Optional[LiberationCommunity] = None
-
-        # Track announced content to avoid duplicates
-        self.announced_infohashes: Set[str] = set()
 
         # Seedbox info
         self._start_time: float = time.time()
@@ -104,23 +101,19 @@ class LiberationAnnouncer:
         Announce all seeded content to the network.
 
         Returns:
-            Number of new content items announced
+            Number of peers reached across all content items
         """
         if not self.community:
             logger.warning("Cannot announce: community not initialized")
             return 0
 
         content_list = self.seedbox.get_content_for_broadcast()
-        new_announcements = 0
+        total_sent = 0
 
         for content in content_list:
             # Extract infohash from magnet link
             infohash = self._extract_infohash(content.magnet_link)
             if not infohash:
-                continue
-
-            # Skip if already announced
-            if infohash in self.announced_infohashes:
                 continue
 
             # Create payload
@@ -131,15 +124,13 @@ class LiberationAnnouncer:
                 timestamp=int(time.time())
             )
 
-            # Broadcast to peers
+            # Broadcast to peers (community handles per-peer dedup via sent_to_peers)
             sent_count = self.community.broadcast_content(payload, infohash)
-
+            total_sent += sent_count
             if sent_count > 0:
-                self.announced_infohashes.add(infohash)
-                new_announcements += 1
-                logger.info(f"Announced: {content.file_path.name} to {sent_count} peers")
+                logger.info(f"Announced: {content.file_path.name} to {sent_count} new peer(s)")
 
-        return new_announcements
+        return total_sent
 
     async def announce_loop(self, interval: int = 180) -> None:
         """
@@ -277,7 +268,6 @@ class LiberationAnnouncer:
     def get_stats(self) -> dict:
         """Get announcer statistics."""
         return {
-            "announced_content": len(self.announced_infohashes),
             "connected_peers": len(self.community.get_peers()) if self.community else 0,
             "community_active": self.community is not None
         }

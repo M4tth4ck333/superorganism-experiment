@@ -160,7 +160,7 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Seedbox loop error: {e}", exc_info=True)
 
-    async def run_announcer(self) -> None:
+    async def run_torrent_announcer(self) -> None:
         """Run the IPV8 liberation announcer."""
         try:
             await self.announcer.start()
@@ -221,7 +221,7 @@ class Orchestrator:
             asyncio.create_task(self.check_for_updates()),
             asyncio.create_task(self.heartbeat()),
             asyncio.create_task(self.run_seedbox_loop()),
-            asyncio.create_task(self.run_announcer()),
+            asyncio.create_task(self.run_torrent_announcer()),
             asyncio.create_task(self.run_seedbox_info_announcer()),
             asyncio.create_task(self.monitor_loop()),
         ]

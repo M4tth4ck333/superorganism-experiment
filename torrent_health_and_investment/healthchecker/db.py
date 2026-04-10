@@ -60,6 +60,13 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_last_checked ON received_content(last_checked);
     """)
 
+    # Migration: add last_announced_at if absent
+    try:
+        cur.execute("ALTER TABLE received_content ADD COLUMN last_announced_at INTEGER")
+        con.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
     con.commit()
     con.close()
 
@@ -78,17 +85,15 @@ def insert_received_content(
     """
     (con, cur) = get_con()
     try:
-        cur.execute(
-            """INSERT INTO received_content
-               (infohash, url, license, magnet_link, received_at, source_peer)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (infohash, url, license, magnet_link, received_at, source_peer)
-        )
+        cur.execute("""
+            INSERT INTO received_content
+                (infohash, url, license, magnet_link, received_at, source_peer, last_announced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(infohash) DO UPDATE SET
+                last_announced_at = excluded.last_announced_at
+        """, (infohash, url, license, magnet_link, received_at, source_peer, received_at))
         con.commit()
         return True
-    except sqlite3.IntegrityError:
-        # Duplicate infohash - already in database
-        return False
     finally:
         con.close()
 
@@ -139,6 +144,43 @@ def get_all_received_infohashes() -> Set[str]:
     results = cur.fetchall()
     con.close()
     return {r[0] for r in results}
+
+
+def purge_stale_entries(cutoff_ts: int, keep_samples: int = 30) -> int:
+    """
+    Remove received_content rows not re-announced since cutoff_ts,
+    their dht_samples, and trim remaining samples to keep_samples per infohash.
+    Returns number of content rows deleted.
+    """
+    con, cur = get_con()
+
+    cur.execute("""
+        SELECT infohash FROM received_content
+        WHERE COALESCE(last_announced_at, received_at) < ?
+    """, (cutoff_ts,))
+    stale = [r[0] for r in cur.fetchall()]
+
+    if stale:
+        placeholders = ",".join("?" * len(stale))
+        cur.execute(f"DELETE FROM dht_samples WHERE infohash IN ({placeholders})", stale)
+        cur.execute(f"DELETE FROM received_content WHERE infohash IN ({placeholders})", stale)
+
+    # Trim dht_samples: keep last keep_samples rows per infohash
+    cur.execute("""
+        DELETE FROM dht_samples
+        WHERE id NOT IN (
+            SELECT id FROM dht_samples d
+            WHERE (
+                SELECT COUNT(*) FROM dht_samples d2
+                WHERE d2.infohash = d.infohash AND d2.ts >= d.ts
+            ) <= ?
+        )
+    """, (keep_samples,))
+
+    con.commit()
+    con.close()
+    return len(stale)
+
 
 def insert_sample(
     infohash_hex: str, 
