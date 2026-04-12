@@ -82,6 +82,12 @@ async def _tick() -> None:
         )
         return
 
+    if node_state.days_remaining is None:
+        logger.warning(
+            "%s days_remaining unknown (SporeStack unreachable), skipping tick", _LOG_PREFIX
+        )
+        return
+
     caution_trait = ps.get_caution_trait()
     live_peers = registry.get_live_peers()
 
@@ -90,8 +96,12 @@ async def _tick() -> None:
         logger.warning("%s Spawn already in progress, skipping tick", _LOG_PREFIX)
         return
 
+    if ps.is_failsafe_in_progress():
+        logger.warning("%s Failsafe already in progress, skipping tick", _LOG_PREFIX)
+        return
+
     # PRIORITY 1 — failsafe
-    if node_state.days_remaining is not None and node_state.days_remaining < Config.FAILSAFE_TRIGGER_DAYS:
+    if node_state.days_remaining < Config.FAILSAFE_TRIGGER_DAYS:
         logger.critical(
             "%s CRITICAL: runway %d days < failsafe threshold %d days — executing failsafe",
             _LOG_PREFIX, node_state.days_remaining, Config.FAILSAFE_TRIGGER_DAYS,
@@ -100,7 +110,7 @@ async def _tick() -> None:
         return
 
     # PRIORITY 2 — top up SporeStack balance
-    if node_state.days_remaining is not None and node_state.days_remaining < Config.TOPUP_TRIGGER_DAYS:
+    if node_state.days_remaining < Config.TOPUP_TRIGGER_DAYS:
         logger.info(
             "%s Runway %d days < topup threshold %d days — topping up SporeStack balance",
             _LOG_PREFIX, node_state.days_remaining, Config.TOPUP_TRIGGER_DAYS,

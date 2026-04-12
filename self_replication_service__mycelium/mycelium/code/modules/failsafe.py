@@ -9,6 +9,7 @@ then lets the VPS expire naturally.
 import logging
 from typing import List, Optional
 
+import modules.state as state_module
 from modules.node_monitor import NodeState
 from modules.peer_registry import PeerInfo
 
@@ -30,8 +31,15 @@ async def execute_failsafe(node_state: NodeState, peers: List[PeerInfo]) -> None
         return
     target_address = best.btc_address
 
+    ps = state_module.get()
+    if ps:
+        ps.mark_failsafe_started(target_address)
+
     # TODO 11: sign and broadcast BTC transfer to target_address
     logger.info(
         "[FAILSAFE STUB] would transfer %d sat to %s — not implemented",
         node_state.btc_balance_sat, target_address,
     )
+
+    if ps:
+        ps.mark_failsafe_completed()

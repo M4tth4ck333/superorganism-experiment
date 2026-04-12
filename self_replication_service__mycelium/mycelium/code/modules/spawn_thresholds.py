@@ -40,6 +40,16 @@ def check_spawn_eligibility(node_state: NodeState, caution_trait: float) -> Spaw
     effective_threshold = int(Config.SPAWN_THRESHOLD_DAYS * (1 + c))
     effective_reserve   = int(Config.SPAWN_RESERVE_DAYS   * (1 + c))
 
+    if node_state.days_remaining is None:
+        return SpawnEligibility(
+            eligible=False, runway_ok=False, reserve_ok=False,
+            reason="days_remaining unknown",
+            effective_threshold=effective_threshold,
+            effective_reserve=effective_reserve,
+            actual_days=0,
+            child_share_sat=0,
+        )
+
     runway_ok  = node_state.days_remaining >= effective_threshold
     reserve_ok = node_state.days_remaining >= effective_reserve
     eligible   = runway_ok and reserve_ok

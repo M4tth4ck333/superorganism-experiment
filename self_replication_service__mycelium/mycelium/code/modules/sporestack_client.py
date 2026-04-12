@@ -24,10 +24,10 @@ def get_info(token: str) -> Optional[dict]:
 
 def get_servers(token: str) -> Optional[list]:
     """
-    Get all servers from SporeStack API for this token
+    Get active (non-forgotten, non-deleted) servers from SporeStack API for this token.
     """
     try:
-        url = f"https://api.sporestack.com/token/{token}/servers"
+        url = f"https://api.sporestack.com/token/{token}/servers?include_forgotten=false&include_deleted=false"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status != 200:
