@@ -127,8 +127,6 @@ class LiberationAnnouncer:
             # Broadcast to peers (community handles per-peer dedup via sent_to_peers)
             sent_count = self.community.broadcast_content(payload, infohash)
             total_sent += sent_count
-            if sent_count > 0:
-                logger.info(f"Announced: {content.file_path.name} to {sent_count} new peer(s)")
 
         return total_sent
 

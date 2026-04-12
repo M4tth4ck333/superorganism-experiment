@@ -179,6 +179,11 @@ class Orchestrator:
             await asyncio.to_thread(monitor.refresh)
             await asyncio.sleep(node_monitor.NodeMonitor.REFRESH_INTERVAL)
 
+    async def run_decision_loop(self) -> None:
+        """Run the autonomous decision loop (spawn / failsafe / topup / do-nothing)."""
+        from modules.decision_loop import run as decision_run
+        await decision_run(lambda: self.running)
+
     async def run_seedbox_info_announcer(self) -> None:
         """Run the seedbox info broadcast loop (waits for community init)."""
         logger.info("[SEEDBOX-INFO] Waiting for community to initialize...")
@@ -224,6 +229,7 @@ class Orchestrator:
             asyncio.create_task(self.run_torrent_announcer()),
             asyncio.create_task(self.run_seedbox_info_announcer()),
             asyncio.create_task(self.monitor_loop()),
+            asyncio.create_task(self.run_decision_loop()),
         ]
         self._tasks = [self.seedbox, *tasks]
 

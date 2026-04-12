@@ -1,0 +1,35 @@
+import logging
+
+import modules.state as state_module
+from modules.node_monitor import NodeState
+from modules.spawn_thresholds import compute_child_share, mutate_caution_trait
+
+logger = logging.getLogger(__name__)
+
+
+async def spawn_child(node_state: NodeState, caution_trait: float, child_token: str) -> None:
+    """
+    Provision a new VPS, deploy mycelium, inject env, and transfer BTC inheritance.
+
+    Caller has already called ps.mark_spawn_started(child_token).
+    This function calls mark_spawn_completed() at the end.
+
+    TODO 10: provision VPS via SporeStack, deploy code, inject env vars, transfer BTC.
+    """
+    ps = state_module.get()
+    child_caution = mutate_caution_trait(caution_trait)
+    child_share_sat = compute_child_share(node_state.btc_balance_sat)
+
+    try:
+        # TODO 10: provision VPS, deploy code, inject env, transfer BTC
+        logger.info(
+            "[SPAWNER STUB] would spawn child: token=%s, share=%d sat, caution=%.3f"
+            " — not implemented",
+            child_token, child_share_sat, child_caution,
+        )
+        ps.mark_spawn_completed(success=False, child_btc_address="")
+        # success=False: stub attempt not recorded in spawn_history;
+        # will retry on next tick if still eligible
+    except Exception:
+        logger.error("[SPAWNER] Unexpected error", exc_info=True)
+        # leave flag set — retry on next restart
