@@ -30,7 +30,7 @@ from ipv8.messaging.payload_dataclass import DataClassPayload
 from ipv8.peer import Peer
 from ipv8_service import IPv8
 
-from mab import UCB1, ThompsonSampling, ArmStats
+from mab import UCB1, ThompsonSampling, ArmStats, OriginatorEntry
 from datasets import get_dataset
 from ltr_evaluator import load_model
 
@@ -65,11 +65,9 @@ def log(message: str) -> None:
 
 @dataclass
 class MABStatsMessage(DataClassPayload[10]):
-    """MAB statistics from a peer."""
+    """MAB statistics from a peer — per-originator CRDT tables."""
     sender_id: int
-    arm_names: str  # JSON list
-    pulls: str      # JSON list
-    rewards: str    # JSON list
+    tables: str  # JSON: {arm_name: {originator_id: {pulls, total_reward|alpha, beta}}}
 
 
 @dataclass
@@ -175,15 +173,19 @@ class LTRMABCommunity(Community):
         # Initialize MAB with initial models (excludes hot-swap model)
         model_names = list(self._state["initial_model_names"])
         algorithm = self._state.get("algorithm", "ucb1")
+        peer_id = str(self.peer_id)
         if algorithm == "thompson":
-            self.bandit = ThompsonSampling(model_names)
+            self.bandit = ThompsonSampling(model_names, peer_id=peer_id)
         else:
-            self.bandit = UCB1(model_names, c=2.0)
+            self.bandit = UCB1(model_names, c=2.0, peer_id=peer_id)
         self.active_models = set(model_names)
         self.excluded_models = set()
 
         # Metric label
         self.metric = self._state.get("metric", "ndcg")
+
+        # Optional callback for GUI event logging: fn(msg: str, kind: str)
+        self.on_event = None
 
         # Tracking
         self.queries_processed = 0
@@ -198,42 +200,11 @@ class LTRMABCommunity(Community):
     def started(self) -> None:
         log(f"[Peer {self.peer_id}] Started with models: {list(self.active_models)}")
 
-    def _get_arm_pulls(self, name: str) -> int:
-        """Get pull count for an arm, works with both UCB1 and ThompsonSampling."""
-        arm = self.bandit.arms[name]
-        return arm.pulls if isinstance(arm, ArmStats) else arm["pulls"]
-
     def select_active_arm(self) -> str | None:
         """Select arm only from active (non-excluded) models."""
         if not self.active_models:
             return None
-
-        # First try untried active arms
-        for name in self.active_models:
-            if self._get_arm_pulls(name) == 0:
-                return name
-
-        if isinstance(self.bandit, ThompsonSampling):
-            # Thompson Sampling among active arms only
-            samples = {
-                name: np.random.beta(self.bandit.arms[name]["alpha"], self.bandit.arms[name]["beta"])
-                for name in self.active_models
-            }
-            return max(samples, key=samples.get)
-        else:
-            # UCB selection among active arms only
-            best_arm = None
-            best_ucb = -float('inf')
-
-            for name in self.active_models:
-                stats = self.bandit.arms[name]
-                exploration = self.bandit.c * np.sqrt(np.log(self.bandit.total_pulls + 1) / (stats.pulls + 1))
-                ucb = stats.mean_reward + exploration
-                if ucb > best_ucb:
-                    best_ucb = ucb
-                    best_arm = name
-
-            return best_arm
+        return self.bandit.select_arm(active=self.active_models)
 
     def process_query(self, query_idx: int) -> tuple[str, float, float, float]:
         """Process a single query, return (model, score@1, score@5, score@10)."""
@@ -280,29 +251,17 @@ class LTRMABCommunity(Community):
         return f"{m}@1={avg_1:.3f}, {m}@5={avg_5:.3f}, {m}@10={avg_10:.3f}"
 
     async def send_gossip(self) -> int:
-        """Send MAB statistics to a random subset of peers. Returns number of peers gossiped to."""
+        """Send per-originator CRDT tables to a random subset of peers."""
         peers = self.get_peers()
         if not peers:
             return 0
 
-        # Pick a random subset of peers to gossip with
         if len(peers) > MAX_GOSSIP_PEERS:
             peers = list(np.random.choice(peers, size=MAX_GOSSIP_PEERS, replace=False))
 
-        stats = self.bandit.get_stats()
-        names = list(stats.keys())
-        pulls = [stats[n]["pulls"] for n in names]
-        # UCB1 has total_reward; Thompson has alpha-1 as total successes
-        if isinstance(self.bandit, ThompsonSampling):
-            rewards = [stats[n]["alpha"] - 1.0 for n in names]
-        else:
-            rewards = [stats[n]["total_reward"] for n in names]
-
         msg = MABStatsMessage(
             sender_id=self.peer_id,
-            arm_names=json.dumps(names),
-            pulls=json.dumps(pulls),
-            rewards=json.dumps(rewards),
+            tables=json.dumps(self.bandit.get_originator_tables()),
         )
 
         for peer in peers:
@@ -312,43 +271,42 @@ class LTRMABCommunity(Community):
 
     @lazy_wrapper(MABStatsMessage)
     def on_mab_stats(self, peer: Peer, payload: MABStatsMessage) -> None:
-        """Merge MAB stats from peer."""
-        names = json.loads(payload.arm_names)
-        pulls = json.loads(payload.pulls)
-        rewards = json.loads(payload.rewards)
+        """Merge per-originator CRDT tables received from a peer."""
+        remote_tables: dict[str, dict[str, dict]] = json.loads(payload.tables)
 
-        merged_any = False
         merge_details = []
 
-        for name, remote_pulls, remote_reward in zip(names, pulls, rewards):
-            if name not in self.bandit.arms:
-                continue
+        for arm, remote_orig_table in remote_tables.items():
+            # Deserialise raw dicts → OriginatorEntry objects
+            remote_entries: dict[str, OriginatorEntry] = {
+                origin: OriginatorEntry(
+                    pulls=d["pulls"],
+                    total_reward=d.get("total_reward", 0.0),
+                    alpha=d.get("alpha", 1.0),
+                    beta=d.get("beta", 1.0),
+                )
+                for origin, d in remote_orig_table.items()
+            }
 
-            local_arm = self.bandit.arms[name]
-            if isinstance(local_arm, ArmStats):
-                # UCB1
-                if remote_pulls > local_arm.pulls:
-                    diff = remote_pulls - local_arm.pulls
-                    old_pulls = local_arm.pulls
-                    local_arm.pulls = remote_pulls
-                    local_arm.total_reward = remote_reward
-                    self.bandit.total_pulls += diff
-                    merged_any = True
-                    merge_details.append(f"{name}: {old_pulls}->{remote_pulls} pulls")
+            if arm in self.bandit.tables:
+                old_n = sum(e.pulls for e in self.bandit.tables[arm].values())
+                self.bandit.crdt_merge(arm, remote_entries)
+                new_n = sum(e.pulls for e in self.bandit.tables[arm].values())
+                if new_n > old_n:
+                    merge_details.append(f"{arm}: {old_n}->{new_n} pulls")
             else:
-                # ThompsonSampling (dict with alpha/beta/pulls)
-                if remote_pulls > local_arm["pulls"]:
-                    old_pulls = local_arm["pulls"]
-                    # Approximate: set alpha/beta from total reward counts
-                    if remote_pulls > 0:
-                        local_arm["alpha"] = 1.0 + remote_reward
-                        local_arm["beta"] = 1.0 + (remote_pulls - remote_reward)
-                    local_arm["pulls"] = remote_pulls
-                    self.bandit.total_pulls += remote_pulls - old_pulls
-                    merged_any = True
-                    merge_details.append(f"{name}: {old_pulls}->{remote_pulls} pulls")
+                # Arm only the neighbor knows — adopt it
+                self.bandit.add_arm(arm, remote_table=remote_entries)
+                self.active_models.add(arm)
+                n = sum(e.pulls for e in self.bandit.tables[arm].values())
+                merge_details.append(f"{arm}: new arm, {n} pulls inherited")
+                if self.on_event:
+                    self.on_event(
+                        f"NEW ARM via gossip from Peer {payload.sender_id}: {arm} ({n} discounted pulls)",
+                        "round",
+                    )
 
-        if merged_any:
+        if merge_details:
             log(f"[Peer {self.peer_id}] GOSSIP RECEIVED from Peer {payload.sender_id}: merged [{', '.join(merge_details)}]")
 
     def _get_mean_reward(self, stats_entry: dict) -> float:
@@ -356,34 +314,44 @@ class LTRMABCommunity(Community):
         return stats_entry.get("mean_reward", stats_entry.get("expected_reward", 0.0))
 
     def check_exclusions(self, round_num: int) -> list[str]:
-        """Check and exclude poorly performing models. Returns list of excluded models."""
+        """Eliminate arms whose UCB is below the LCB of the best arm (Insert-Eliminate style).
+
+        An arm is retired only when confidence intervals are non-overlapping:
+          UCB(k) < LCB(best)
+        This gives a formal guarantee that no near-optimal arm is eliminated.
+        Reference: Chawla et al. (2020), Gossiping Insert-Eliminate.
+        """
         if len(self.active_models) <= 1:
             return []
 
-        stats = self.bandit.get_stats()
-        active_stats = {name: stats[name] for name in self.active_models}
+        # Require minimum evidence before any arm is eligible
+        active_with_pulls = {
+            name for name in self.active_models
+            if sum(e.pulls for e in self.bandit.tables[name].values()) >= MIN_PULLS_FOR_ELIMINATION
+        }
+        if len(active_with_pulls) <= 1:
+            return []
 
-        # Find best performer
-        best_name = max(active_stats, key=lambda n: self._get_mean_reward(active_stats[n]))
-        best_reward = self._get_mean_reward(active_stats[best_name])
+        # Find arm with highest LCB — this is the "best" arm by conservative estimate
+        best_name = max(active_with_pulls, key=lambda n: self.bandit.confidence_bounds(n)[0])
+        best_lcb = self.bandit.confidence_bounds(best_name)[0]
 
-        if best_reward == 0:
+        if best_lcb == 0.0:
             return []
 
         excluded = []
-        for name in list(self.active_models):
-            s = stats[name]
-            if s["pulls"] < MIN_PULLS_FOR_ELIMINATION:
+        for name in list(active_with_pulls):
+            if name == best_name:
                 continue
-
-            mr = self._get_mean_reward(s)
-            if mr < ELIMINATION_THRESHOLD * best_reward:
-                self.exclude_model(name, round_num, best_name, best_reward, mr)
+            arm_ucb = self.bandit.confidence_bounds(name)[1]
+            if arm_ucb < best_lcb:
+                lcb, ucb = self.bandit.confidence_bounds(name)
+                self.exclude_model(name, round_num, best_name, best_lcb, lcb, ucb)
                 excluded.append(name)
 
         return excluded
 
-    def exclude_model(self, name: str, round_num: int, best_name: str, best_reward: float, model_reward: float) -> None:
+    def exclude_model(self, name: str, round_num: int, best_name: str, best_lcb: float, arm_lcb: float, arm_ucb: float) -> None:
         """Exclude a model from future selection."""
         if name not in self.active_models:
             return
@@ -395,7 +363,7 @@ class LTRMABCommunity(Community):
         log(f"{'#'*70}")
         log(f"[Peer {self.peer_id}] ARM EXCLUDED: {name}")
         log(f"[Peer {self.peer_id}]   Round: {round_num}")
-        log(f"[Peer {self.peer_id}]   Reason: mean_reward={model_reward:.3f} < {ELIMINATION_THRESHOLD}*{best_reward:.3f} (best={best_name})")
+        log(f"[Peer {self.peer_id}]   Reason: UCB({name})={arm_ucb:.3f} < LCB({best_name})={best_lcb:.3f}  (CI=[{arm_lcb:.3f}, {arm_ucb:.3f}])")
         log(f"[Peer {self.peer_id}]   Remaining active: {list(self.active_models)}")
         log(f"{'#'*70}")
         log(f"")
@@ -423,25 +391,26 @@ class LTRMABCommunity(Community):
             log(f"[Peer {self.peer_id}] ARM EXCLUDED (via gossip from Peer {payload.sender_id}): {payload.model_name}")
             log(f"[Peer {self.peer_id}]   Reason: {payload.reason}")
 
-    def add_model(self, model_name: str) -> None:
-        """Hot-swap: add a new model to this peer's MAB."""
-        if model_name in self.bandit.arms:
+    def add_model(self, model_name: str, remote_table: dict[str, OriginatorEntry] | None = None) -> None:
+        """Hot-swap: add a new model to this peer's MAB.
+
+        If remote_table is provided (received via gossip), the arm is seeded
+        with the neighbor's originator entries instead of a blank prior.
+        """
+        if model_name in self.bandit.tables:
             return
         state = self._state
         if model_name not in state["model_scores"]:
             log(f"[Peer {self.peer_id}] Cannot add {model_name}: no precomputed scores")
             return
 
-        if isinstance(self.bandit, ThompsonSampling):
-            self.bandit.arms[model_name] = {"alpha": 1.0, "beta": 1.0, "pulls": 0}
-        else:
-            self.bandit.arms[model_name] = ArmStats(name=model_name)
+        self.bandit.add_arm(model_name, remote_table=remote_table)
         self.active_models.add(model_name)
         log(f"[Peer {self.peer_id}] HOT-SWAP: Added {model_name} to MAB")
         log(f"[Peer {self.peer_id}]   Active models: {sorted(self.active_models)}")
 
     async def propose_model(self, model_name: str) -> None:
-        """Propose a new model: add locally and announce to neighbors."""
+        """Propose a new model: add locally (fresh prior) and announce to neighbors."""
         self.add_model(model_name)
         peers = self.get_peers()
         if len(peers) > MAX_GOSSIP_PEERS:
@@ -454,10 +423,15 @@ class LTRMABCommunity(Community):
     @lazy_wrapper(NewModelMessage)
     def on_new_model(self, peer: Peer, payload: NewModelMessage) -> None:
         """Handle new model announcement from a peer and forward to neighbors."""
-        if payload.model_name in self.bandit.arms:
+        if payload.model_name in self.bandit.tables:
             return
         log(f"[Peer {self.peer_id}] RECEIVED new model announcement: {payload.model_name} from Peer {payload.sender_id}")
         self.add_model(payload.model_name)
+        if self.on_event:
+            self.on_event(
+                f"NEW ARM announced by Peer {payload.sender_id}: {payload.model_name}",
+                "round",
+            )
 
         # Forward to neighbors (epidemic gossip)
         msg = NewModelMessage(sender_id=self.peer_id, model_name=payload.model_name)
@@ -712,8 +686,8 @@ async def run_local_experiment(
             for model_name in excluded:
                 if model_name not in all_excluded:
                     all_excluded.add(model_name)
-                    stats = comm.bandit.get_stats()
-                    reason = f"mean_reward={comm._get_mean_reward(stats[model_name]):.3f}"
+                    lcb, ucb = comm.bandit.confidence_bounds(model_name)
+                    reason = f"UCB={ucb:.3f} < best_LCB"
                     if gossip_enabled:
                         await comm.broadcast_exclusion(model_name, round_num, reason)
                     dashboard_state.event(f"ARM EXCLUDED: {model_name} ({reason})", "exclusion")

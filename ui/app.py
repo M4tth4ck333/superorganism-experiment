@@ -27,9 +27,12 @@ from ui.widgets.create_solution_overlay import CreateSolutionOverlay
 from ui.widgets.fleet_widget import FleetWidget
 from ui.widgets.issue_details import IssueDetailWidget
 from ui.widgets.issue_overview import IssuesOverviewWidget
+from ui.widgets.ltr_community_widget import LTRCommunityWidget
 from ui.widgets.sidebar import SidebarWidget
 from ui.widgets.solution_details import SolutionDetailWidget
 from ui.widgets.torrents_widget import TorrentsWidget
+
+from crowdsourced_learn_to_rank.ltr_community_thread import LTRCommunityThread
 
 if TYPE_CHECKING:
     from healthchecker.health_thread import TorrentHealthThread
@@ -130,11 +133,16 @@ class Application(QMainWindow):
         self.torrents_page = TorrentsWidget()
         self.fleet_page = FleetWidget()
 
+        self.experiment_page = LTRCommunityWidget()
+        self.experiment_page.run_requested.connect(self._on_experiment_run_requested)
+        self._ltr_thread: Optional[LTRCommunityThread] = None
+
         self.content_stack.addWidget(self.torrents_page)
         self.content_stack.addWidget(self.fleet_page)
         self.content_stack.addWidget(self.issues_page)
         self.content_stack.addWidget(self.issue_detail_page)
         self.content_stack.addWidget(self.solution_detail_page)
+        self.content_stack.addWidget(self.experiment_page)
 
         root_layout.addWidget(self.sidebar)
         root_layout.addWidget(self.content_stack, 1)
@@ -146,6 +154,7 @@ class Application(QMainWindow):
         self.sidebar.issues_clicked.connect(self._show_issues_page)
         self.sidebar.my_issues_clicked.connect(lambda: print("My Issues clicked"))
         self.sidebar.voting_history_clicked.connect(lambda: print("Voting History clicked"))
+        self.sidebar.experiment_clicked.connect(self._show_experiment_page)
         self.sidebar.settings_clicked.connect(lambda: print("Settings clicked"))
         self.sidebar.create_clicked.connect(self._open_create_overlay)
 
@@ -354,6 +363,66 @@ class Application(QMainWindow):
     def _show_fleet_page(self) -> None:
         self._set_active_nav("fleet")
         self.content_stack.setCurrentWidget(self.fleet_page)
+
+    def _show_experiment_page(self) -> None:
+        self._set_active_nav("experiment")
+        self.content_stack.setCurrentWidget(self.experiment_page)
+
+    def _on_experiment_run_requested(
+        self,
+        dataset: str,
+        algorithm: str,
+        metric: str,
+        rounds: int,
+        queries: int,
+        gossip: bool,
+        hotswap_round: int,
+    ) -> None:
+        """Spawn a new LTRCommunityThread for this peer's distributed experiment."""
+        if self._ltr_thread is not None:
+            self._ltr_thread.stop()
+            self._ltr_thread.wait(3000)
+            self._ltr_thread = None
+
+        thread = LTRCommunityThread(
+            dataset_id=dataset,
+            algorithm=algorithm,
+            metric=metric,
+            num_rounds=rounds,
+            queries_per_round=queries,
+            gossip_enabled=gossip,
+            hotswap_round=hotswap_round,
+        )
+        thread.started_ok.connect(
+            self.experiment_page.on_started, type=Qt.ConnectionType.QueuedConnection
+        )
+        thread.snapshot.connect(
+            self.experiment_page.on_snapshot, type=Qt.ConnectionType.QueuedConnection
+        )
+        thread.log_event.connect(
+            self.experiment_page.on_log_event, type=Qt.ConnectionType.QueuedConnection
+        )
+        thread.finished_ok.connect(
+            self.experiment_page.on_finished, type=Qt.ConnectionType.QueuedConnection
+        )
+        thread.error.connect(
+            self.experiment_page.on_error, type=Qt.ConnectionType.QueuedConnection
+        )
+        thread.finished.connect(self._on_ltr_thread_finished)
+
+        self._ltr_thread = thread
+        thread.start()
+
+    def _on_ltr_thread_finished(self) -> None:
+        # Allow the next RUN click to spawn a fresh thread
+        self._ltr_thread = None
+
+    def stop_ltr_thread(self) -> None:
+        """Called from main on shutdown to stop any running experiment cleanly."""
+        if self._ltr_thread is not None:
+            self._ltr_thread.stop()
+            self._ltr_thread.wait(2000)
+            self._ltr_thread = None
 
     def _on_health_data_changed(self) -> None:
         self.torrents_page.load(self._health_thread.get_torrent_data())
