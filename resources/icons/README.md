@@ -6,12 +6,15 @@ All icons are credited below with their original source and license information.
 
 ## Attribution Table
 
-| File                 | Creator | Source                              | License     | Usage                 |
-|----------------------|---------|-------------------------------------|-------------|-----------------------|
-| `arrow-up-right.svg` | -       | [Heroicons](https://heroicons.com/) | MIT License | External links        |
-| `bolt.svg`           | -       | [Heroicons](https://heroicons.com/) | MIT License | Join the mesh buttons |
-| `check.svg`          | -       | [Heroicons](https://heroicons.com/) | MIT License | Bullet lists          |
-| `cog-6-tooth.svg`    | -       | [Heroicons](https://heroicons.com/) | MIT License | Settings              |
+| File                     | Creator | Source                              | License     | Usage                         |
+|--------------------------|---------|-------------------------------------|-------------|-------------------------------|
+| `arrow-up-right.svg`     | -       | [Heroicons](https://heroicons.com/) | MIT License | External links                |
+| `bolt.svg`               | -       | [Heroicons](https://heroicons.com/) | MIT License | Join the mesh buttons         |
+| `check.svg`              | -       | [Heroicons](https://heroicons.com/) | MIT License | Bullet lists                  |
+| `clock.svg`              | -       | [Heroicons](https://heroicons.com/) | MIT License | Time indication               |
+| `check.svg`              | -       | [Heroicons](https://heroicons.com/) | MIT License | Bullet lists                  |
+| `document-duplicate.svg` | -       | [Heroicons](https://heroicons.com/) | MIT License | Copying items                 |
+| `fingerprint.svg`        | -       | [Heroicons](https://heroicons.com/) | MIT License | Registration / authentication |
 
 ## Maintenance
 
