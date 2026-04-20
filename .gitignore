@@ -331,3 +331,6 @@ democracy/keys/
 
 # Data folder
 democracy/data/
+
+# Bitcoin regtest data
+.bitcoin/
