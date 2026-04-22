@@ -237,15 +237,53 @@ status_node() {
 send_demo_tx() {
   local dest="${1:-}"
   local amount="${2:-1.0}"
+  local op_return_hex="${3:-}"
 
   if [ -z "$dest" ]; then
-    echo "Usage: $0 send <address> [amount]" >&2
+    echo "Usage: $0 send <address> [amount] [op_return_hex]" >&2
     exit 1
   fi
 
+  local raw_tx
+  local funded_json
+  local funded_hex
+  local signed_json
+  local signed_hex
+  local complete
   local txid
-  txid="$(wallet_btc sendtoaddress "$dest" "$amount")"
+
+  if [ -n "$op_return_hex" ]; then
+    raw_tx="$(
+      wallet_btc createrawtransaction \
+        "[]" \
+        "[{\"$dest\": $amount}, {\"data\": \"$op_return_hex\"}]"
+    )"
+  else
+    raw_tx="$(
+      wallet_btc createrawtransaction \
+        "[]" \
+        "[{\"$dest\": $amount}]"
+    )"
+  fi
+
+  funded_json="$(wallet_btc fundrawtransaction "$raw_tx")"
+  funded_hex="$(echo "$funded_json" | jq -r '.hex')"
+
+  signed_json="$(wallet_btc signrawtransactionwithwallet "$funded_hex")"
+  signed_hex="$(echo "$signed_json" | jq -r '.hex')"
+  complete="$(echo "$signed_json" | jq -r '.complete')"
+
+  if [ "$complete" != "true" ]; then
+    echo "Failed to fully sign transaction." >&2
+    exit 1
+  fi
+
+  txid="$(wallet_btc sendrawtransaction "$signed_hex")"
+
   echo "Sent transaction: $txid"
+  if [ -n "$op_return_hex" ]; then
+    echo "Included OP_RETURN data: $op_return_hex"
+  fi
   echo "Mine one block to confirm it:"
   echo "  $0 mine 1"
 }
@@ -284,13 +322,13 @@ case "${1:-start}" in
     mine_blocks "${2:-1}"
     ;;
   send)
-    send_demo_tx "${2:-}" "${3:-1.0}"
+    send_demo_tx "${2:-}" "${3:-1.0}" "${4:-}"
     ;;
   treasury-address)
     show_treasury_address
     ;;
   *)
-    echo "Usage: $0 {start|stop|reset|status|mine [n]|send <address> [amount]|treasury-address}" >&2
+    echo "Usage: $0 {start|stop|reset|status|mine [n]|send <address> [amount] [op_return_hex]|treasury-address}" >&2
     exit 1
     ;;
 esac
