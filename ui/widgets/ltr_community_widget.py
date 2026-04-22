@@ -58,6 +58,8 @@ _ARM_COLORS = [
     "#60a5fa", "#f472b6", "#a3e635", "#fb923c",
 ]
 
+_RECENT_WINDOW = 50
+
 
 def _arm_color(name: str, known: dict[str, str]) -> str:
     if name not in known:
@@ -72,6 +74,31 @@ def _detect_local_datasets() -> list[str]:
         return found if found else ["istella"]
     except Exception:
         return ["istella"]
+
+
+def _detect_local_models(dataset_id: str | None = None) -> list[str]:
+    """Scan the models directory for available arms (read metadata `name` field).
+
+    If `dataset_id` is given, only files whose filename starts with
+    `{dataset_id}_` are returned — this matches load_experiment_models'
+    glob pattern so the dropdown stays in sync with what actually loads.
+    """
+    import json
+    models_dir = _BENCH_DIR / "models"
+    names: list[str] = []
+    if not models_dir.exists():
+        return names
+    pattern = f"{dataset_id}_*.meta.json" if dataset_id else "*.meta.json"
+    for meta_file in sorted(models_dir.glob(pattern)):
+        try:
+            with open(meta_file) as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        name = meta.get("name")
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +156,19 @@ class MeanRewardChart(_BaseChart):
         self._empty_text()
         self._color_map: dict[str, str] = {}
 
-    def update_data(self, history: list[dict], excluded: set[str]) -> None:
+    def update_data(self, history: list[dict], excluded: set[str], recent_only: bool = False) -> None:
         if not history:
             return
+        if recent_only and len(history) > _RECENT_WINDOW:
+            history = history[-_RECENT_WINDOW:]
         self._ax.cla()
         self._style()
         self._label("Gossip Round", "Mean Reward per Arm", "Mean Reward per Arm")
 
-        rounds = [h["round"] for h in history]
+        if recent_only:
+            x_vals = list(range(1, len(history) + 1))
+        else:
+            x_vals = [h["round"] for h in history]
         all_arms: set[str] = set()
         for h in history:
             all_arms.update(h.get("arm_mean_reward", {}).keys())
@@ -148,13 +180,17 @@ class MeanRewardChart(_BaseChart):
             ls = "--" if arm in excluded else "-"
             label = f"{arm} ✗" if arm in excluded else arm
             self._ax.plot(
-                rounds, rewards,
+                x_vals, rewards,
                 color=color, alpha=alpha, linestyle=ls,
                 linewidth=1.8, marker="o", markersize=4, label=label,
             )
 
-        if rounds:
-            self._ax.set_xticks(rounds)
+        if recent_only:
+            self._ax.set_xlim(1, _RECENT_WINDOW)
+            step = max(1, _RECENT_WINDOW // 10)
+            self._ax.set_xticks(list(range(1, _RECENT_WINDOW + 1, step)))
+        elif x_vals:
+            self._ax.set_xticks(x_vals)
         self._legend()
         self._fig.tight_layout(pad=1.2)
         self.draw()
@@ -168,28 +204,37 @@ class CumulativeRewardChart(_BaseChart):
         self._label("Round", "Cumulative Score@10", "Cumulative Reward vs Oracle")
         self._empty_text()
 
-    def update_data(self, history: list[dict]) -> None:
+    def update_data(self, history: list[dict], recent_only: bool = False) -> None:
         if not history:
             return
+        if recent_only and len(history) > _RECENT_WINDOW:
+            history = history[-_RECENT_WINDOW:]
         self._ax.cla()
         self._style()
         self._label("Round", "Cumulative Score@10", "Cumulative Reward vs Oracle")
 
-        rounds = [h["round"] for h in history]
+        if recent_only:
+            x_vals = list(range(1, len(history) + 1))
+        else:
+            x_vals = [h["round"] for h in history]
         bandit = [h.get("cumulative_reward", 0) for h in history]
         oracle = [h.get("oracle_cumulative", 0) for h in history]
 
         self._ax.plot(
-            rounds, bandit, color="#34d399",
+            x_vals, bandit, color="#34d399",
             linewidth=1.8, marker="o", markersize=4, label="Local bandit",
         )
         self._ax.plot(
-            rounds, oracle, color="#ef4444",
+            x_vals, oracle, color="#ef4444",
             linewidth=1.8, marker="o", markersize=4, linestyle="--", label="Oracle",
         )
 
-        if rounds:
-            self._ax.set_xticks(rounds)
+        if recent_only:
+            self._ax.set_xlim(1, _RECENT_WINDOW)
+            step = max(1, _RECENT_WINDOW // 10)
+            self._ax.set_xticks(list(range(1, _RECENT_WINDOW + 1, step)))
+        elif x_vals:
+            self._ax.set_xticks(x_vals)
         self._legend()
         self._fig.tight_layout(pad=1.2)
         self.draw()
@@ -285,12 +330,14 @@ class LTRCommunityWidget(QWidget):
     local arm statistics after each gossip round.
     """
 
-    run_requested = Signal(str, str, str, int, int, bool, int)
-    # dataset, algorithm, metric, rounds, queries, gossip, hotswap_round
+    run_requested = Signal(str, str, str, int, bool, int, str)
+    # dataset, algorithm, metric, queries_per_tick, gossip, hotswap_tick, hotswap_model
+    stop_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setProperty("role", "ltr-page")
+        self._last_snapshot: dict | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(34, 28, 34, 20)
@@ -350,26 +397,46 @@ class LTRCommunityWidget(QWidget):
         self._metric_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._metric_combo.addItems(["ndcg", "mrr"])
 
-        self._rounds_spin = QSpinBox()
-        self._rounds_spin.setProperty("variant", "default")
-        self._rounds_spin.setRange(1, 50)
-        self._rounds_spin.setValue(5)
-
         self._queries_spin = QSpinBox()
         self._queries_spin.setProperty("variant", "default")
         self._queries_spin.setRange(10, 10000)
         self._queries_spin.setSingleStep(10)
         self._queries_spin.setValue(100)
+        self._queries_spin.setToolTip(
+            "Tick size: number of queries processed between each "
+            "gossip + exclusion check."
+        )
 
         self._gossip_check = QCheckBox("Gossip")
         self._gossip_check.setChecked(True)
         self._gossip_check.setProperty("role", "ltr-control-label")
 
+        self._recent_only_check = QCheckBox(f"Display only last {_RECENT_WINDOW} ticks")
+        self._recent_only_check.setChecked(False)
+        self._recent_only_check.setProperty("role", "ltr-control-label")
+        self._recent_only_check.setToolTip(
+            "Show only the most recent ticks on the charts. "
+            "Can be toggled live while the experiment is running."
+        )
+        self._recent_only_check.toggled.connect(self._on_recent_only_toggled)
+
         self._hotswap_spin = QSpinBox()
         self._hotswap_spin.setProperty("variant", "default")
         self._hotswap_spin.setRange(0, 50)
         self._hotswap_spin.setValue(0)
-        self._hotswap_spin.setToolTip("0 = disabled. XGBoost proposed at this round.")
+        self._hotswap_spin.setToolTip(
+            "0 = disabled. Selected model is proposed at this tick."
+        )
+
+        self._hotswap_model_combo = QComboBox()
+        self._hotswap_model_combo.setProperty("variant", "default")
+        self._hotswap_model_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hotswap_model_combo.setToolTip(
+            "Model to propose at the hot-swap tick. Populated from the "
+            "ltr-benchmarking/models folder — filtered to the selected dataset."
+        )
+        self._repopulate_hotswap_models(self._dataset_combo.currentText())
+        self._dataset_combo.currentTextChanged.connect(self._repopulate_hotswap_models)
 
         self._run_btn = QPushButton("RUN")
         self._run_btn.setProperty("variant", "primary")
@@ -377,14 +444,21 @@ class LTRCommunityWidget(QWidget):
         self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._run_btn.clicked.connect(self._on_run_clicked)
 
+        self._stop_btn = QPushButton("STOP")
+        self._stop_btn.setProperty("variant", "secondary")
+        self._stop_btn.setFixedWidth(100)
+        self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.clicked.connect(self._on_stop_clicked)
+
         # Three-column grid: label/widget pairs
         fields = [
             ("Dataset",        self._dataset_combo),
             ("Algorithm",      self._algorithm_combo),
             ("Metric",         self._metric_combo),
-            ("Rounds",         self._rounds_spin),
-            ("Queries/round",  self._queries_spin),
-            ("Hot-swap round", self._hotswap_spin),
+            ("Queries/tick",   self._queries_spin),
+            ("Hot-swap tick",  self._hotswap_spin),
+            ("Hot-swap model", self._hotswap_model_combo),
         ]
         cols_per_row = 3
         for idx, (label, widget) in enumerate(fields):
@@ -399,7 +473,9 @@ class LTRCommunityWidget(QWidget):
         actions_row.setContentsMargins(0, 4, 0, 0)
         actions_row.setSpacing(14)
         actions_row.addWidget(self._gossip_check)
+        actions_row.addWidget(self._recent_only_check)
         actions_row.addStretch()
+        actions_row.addWidget(self._stop_btn)
         actions_row.addWidget(self._run_btn)
         cfg_outer.addLayout(actions_row)
 
@@ -500,12 +576,14 @@ class LTRCommunityWidget(QWidget):
         self._set_status("Running", "warning")
         self._run_btn.setEnabled(False)
         self._run_btn.setText("Running…")
+        self._stop_btn.setEnabled(True)
         self._mean_reward_chart.reset()
         self._cumulative_chart.reset()
         self._leaderboard.setRowCount(0)
         self._event_log.clear()
 
     def on_snapshot(self, snap: dict) -> None:
+        self._last_snapshot = snap
         round_num = snap.get("round", 0)
         phase     = snap.get("phase", "")
         elapsed   = snap.get("elapsed", 0.0)
@@ -515,9 +593,9 @@ class LTRCommunityWidget(QWidget):
         history   = snap.get("round_history", [])
         net_peers = snap.get("network_peers", 0)
         metric    = config.get("metric", "ndcg")
+        recent_only = self._recent_only_check.isChecked()
 
-        total_rounds = config.get("num_rounds", self._rounds_spin.value())
-        self._round_lbl.setText(f"Round: {round_num} / {total_rounds}")
+        self._round_lbl.setText(f"Tick: {round_num}")
         self._phase_lbl.setText(f"Phase: {phase}")
         self._elapsed_lbl.setText(f"{elapsed:.0f}s")
         self._peers_lbl.setText(f"Network peers: {net_peers}")
@@ -528,15 +606,14 @@ class LTRCommunityWidget(QWidget):
                 f"{config['dataset']} · "
                 f"{config.get('algorithm','').upper()} · "
                 f"{config.get('metric','').upper()} · "
-                f"{total_rounds} rounds · "
-                f"{config.get('queries_per_round','')} q/round"
+                f"{config.get('queries_per_round','')} q/tick"
             )
 
         excluded = set(peer.get("excluded", []))
 
         if history:
-            self._mean_reward_chart.update_data(history, excluded)
-            self._cumulative_chart.update_data(history)
+            self._mean_reward_chart.update_data(history, excluded, recent_only=recent_only)
+            self._cumulative_chart.update_data(history, recent_only=recent_only)
 
         if peer:
             self._leaderboard.update_data(peer)
@@ -545,17 +622,19 @@ class LTRCommunityWidget(QWidget):
         self._event_log.append_event(entry)
 
     def on_finished(self) -> None:
-        self._set_status("Done", "success")
+        self._set_status("Stopped", "success")
         self._run_btn.setEnabled(True)
         self._run_btn.setText("RUN")
+        self._stop_btn.setEnabled(False)
         self._event_log.append_event(
-            {"t": 0, "kind": "round", "msg": "── Experiment complete ──"}
+            {"t": 0, "kind": "round", "msg": "── Experiment stopped ──"}
         )
 
     def on_error(self, msg: str) -> None:
         self._set_status("Error", "danger")
         self._run_btn.setEnabled(True)
         self._run_btn.setText("RUN")
+        self._stop_btn.setEnabled(False)
         self._event_log.append_event(
             {"t": 0, "kind": "exclusion", "msg": f"ERROR: {msg}"}
         )
@@ -564,26 +643,65 @@ class LTRCommunityWidget(QWidget):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _repopulate_hotswap_models(self, dataset_id: str) -> None:
+        prev = self._hotswap_model_combo.currentText()
+        self._hotswap_model_combo.blockSignals(True)
+        self._hotswap_model_combo.clear()
+        names = _detect_local_models(dataset_id)
+        if not names:
+            self._hotswap_model_combo.addItem("(none found)")
+            self._hotswap_model_combo.setEnabled(False)
+        else:
+            self._hotswap_model_combo.setEnabled(True)
+            for name in names:
+                self._hotswap_model_combo.addItem(name)
+            if prev in names:
+                self._hotswap_model_combo.setCurrentText(prev)
+        self._hotswap_model_combo.blockSignals(False)
+
+    def _on_recent_only_toggled(self, _checked: bool) -> None:
+        if self._last_snapshot is None:
+            return
+        history = self._last_snapshot.get("round_history", [])
+        if not history:
+            return
+        recent_only = self._recent_only_check.isChecked()
+        excluded = set(self._last_snapshot.get("peer", {}).get("excluded", []))
+        self._mean_reward_chart.update_data(history, excluded, recent_only=recent_only)
+        self._cumulative_chart.update_data(history, recent_only=recent_only)
+
+    def _on_stop_clicked(self) -> None:
+        self._stop_btn.setEnabled(False)
+        self._set_status("Stopping", "warning")
+        self._run_btn.setText("Stopping…")
+        self.stop_requested.emit()
+
     def _on_run_clicked(self) -> None:
+        self._last_snapshot = None
         self._mean_reward_chart.reset()
         self._cumulative_chart.reset()
         self._leaderboard.setRowCount(0)
         self._event_log.clear()
-        self._round_lbl.setText(f"Round: 0 / {self._rounds_spin.value()}")
+        self._round_lbl.setText("Tick: 0")
         self._phase_lbl.setText("Phase: starting")
         self._elapsed_lbl.setText("0s")
         self._peers_lbl.setText("Network peers: 0")
         self._set_status("Starting", "warning")
         self._run_btn.setEnabled(False)
         self._run_btn.setText("Running…")
+        hotswap_model = (
+            self._hotswap_model_combo.currentText()
+            if self._hotswap_model_combo.isEnabled()
+            else ""
+        )
         self.run_requested.emit(
             self._dataset_combo.currentText(),
             self._algorithm_combo.currentText(),
             self._metric_combo.currentText(),
-            self._rounds_spin.value(),
             self._queries_spin.value(),
             self._gossip_check.isChecked(),
             self._hotswap_spin.value(),
+            hotswap_model,
         )
 
     def _set_status(self, text: str, tone: str) -> None:

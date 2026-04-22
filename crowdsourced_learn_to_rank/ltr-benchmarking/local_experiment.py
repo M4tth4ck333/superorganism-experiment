@@ -9,9 +9,11 @@ Features:
 4. Gossip-based stats sharing between rounds
 5. Survival-of-the-fittest: eliminate models with low performance after each round
 """
+import base64
 import json
 import os
 import sys
+import asyncio
 from asyncio import run, sleep, Event, Lock
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +21,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+try:
+    import libtorrent as lt
+except ImportError:  # pragma: no cover — hard dep, but keep import error readable
+    lt = None
 
 # Add parent for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -30,9 +37,9 @@ from ipv8.messaging.payload_dataclass import DataClassPayload
 from ipv8.peer import Peer
 from ipv8_service import IPv8
 
-from mab import UCB1, ThompsonSampling, ArmStats, OriginatorEntry
+from mab import UCB1, ThompsonSampling, ArmStats, OriginatorEntry, _derive_rng
 from datasets import get_dataset
-from ltr_evaluator import load_model
+from ltr_evaluator import load_model, ModelMetadata
 
 # Configuration
 NUM_PEERS = 5
@@ -46,10 +53,22 @@ MAX_GOSSIP_PEERS = 2  # Each peer gossips to at most this many random neighbors 
 MIN_PULLS_FOR_ELIMINATION = 10  # Don't eliminate until arm has been tried this many times
 ELIMINATION_THRESHOLD = 0.75  # Eliminate if reward < threshold * best_reward
 
+# Master seed for deterministic runs. Default None → OS-entropy random (as
+# before). Set to an int to get reproducible runs: every stochastic decision
+# (query sampling, MAB draws, gossip neighbor choice, hotswap proposer, arm
+# tiebreaking) is derived from this seed via per-(peer, purpose) tags, so
+# each peer still runs an independent stream — only the overall trace is
+# reproducible.
+SEED: int | None = None
+
 # Experiment config
 DATASET_ID = "istella"  # Dataset to replay
 DATA_DIR = Path(__file__).parent / "data"
 MODELS_DIR = Path(__file__).parent / "models"
+# Models pulled from peers via libtorrent land here rather than in MODELS_DIR,
+# so it's obvious which files a peer authored locally vs. received over the
+# wire. The directory is created on first use.
+DOWNLOADS_DIR = Path(__file__).parent / "downloaded_models"
 LOGS_DIR = Path(__file__).parent / "logs"
 
 LOG_FILE = LOGS_DIR / f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -65,9 +84,16 @@ def log(message: str) -> None:
 
 @dataclass
 class MABStatsMessage(DataClassPayload[10]):
-    """MAB statistics from a peer — per-originator CRDT tables."""
+    """MAB statistics + model-availability advertisement.
+
+    `tables` carries per-arm CRDT state. `advertisements` carries, for each
+    arm this peer can serve, a magnet URI, the model type, the metadata
+    JSON, and the libtorrent listen endpoint so the receiver can
+    `connect_peer` directly (no tracker / DHT dependency on localhost).
+    """
     sender_id: int
-    tables: str  # JSON: {arm_name: {originator_id: {pulls, total_reward|alpha, beta}}}
+    tables: str            # JSON: {arm_name: {originator_id: {pulls, total_reward|alpha, beta}}}
+    advertisements: str    # JSON: {arm_name: {magnet, model_type, metadata_json, host, port}}
 
 
 @dataclass
@@ -81,9 +107,30 @@ class ExclusionMessage(DataClassPayload[11]):
 
 @dataclass
 class NewModelMessage(DataClassPayload[12]):
-    """Announcement that a new model is available."""
+    """Announcement that a new model is available.
+
+    Carries the magnet + metadata + sender's libtorrent endpoint so the
+    receiver can pull the file on its own without waiting for the next
+    periodic gossip advertisement.
+    """
     sender_id: int
     model_name: str
+    magnet: str
+    metadata_json: str
+    model_type: str
+    host: str
+    port: int
+
+
+# Libtorrent listen-port range for each peer's seeder/leecher session.
+# Ports are picked per-peer via a per-process-unique offset so multiple
+# peers on the same host don't clash.
+LT_PORT_MIN = 17000
+LT_PORT_MAX = 17999
+# How long a receiver waits (in seconds of polling) for a magnet download
+# to complete before giving up on this round. Re-advertised arms retry
+# naturally on subsequent ticks.
+LT_DOWNLOAD_TIMEOUT_S = 60.0
 
 
 def compute_ndcg(y_true: np.ndarray, scores: np.ndarray, k: int) -> float:
@@ -154,6 +201,207 @@ def precompute_model_scores(
     return result
 
 
+def _find_model_file_by_name(model_name: str) -> Path | None:
+    """Locate a model file on disk by its metadata `name` field.
+
+    Filenames vary by type (.txt, .json, .npy), but every model has a
+    sibling `<file>.meta.json` whose `name` field matches what the bandit
+    tracks. We scan meta files once per call — fine at hot-swap rates.
+
+    Scans both MODELS_DIR (built-ins + locally proposed) and DOWNLOADS_DIR
+    (arms received via torrent from other peers).
+    """
+    for search_dir in (MODELS_DIR, DOWNLOADS_DIR):
+        if not search_dir.exists():
+            continue
+        for meta_file in search_dir.glob("*.meta.json"):
+            try:
+                with open(meta_file) as f:
+                    meta = json.load(f)
+            except Exception:
+                continue
+            if meta.get("name") == model_name:
+                model_file = Path(str(meta_file).replace(".meta.json", ""))
+                if model_file.exists():
+                    return model_file
+    return None
+
+
+def _write_meta_and_load(
+    model_path: Path,
+    metadata_json: str,
+):
+    """Write the sibling `.meta.json` and load the model. Runs in an executor."""
+    meta_path = model_path.with_suffix(model_path.suffix + ".meta.json")
+    meta_path.write_text(metadata_json)
+    model, _meta = load_model(model_path)
+    return model
+
+
+class TorrentSeeder:
+    """One libtorrent session per peer. Seeds local models and downloads
+    magnets received via gossip advertisements.
+
+    Designed for localhost-first: no tracker, no DHT bootstrap. The gossip
+    payload carries the sender's libtorrent `(host, port)` so the receiver
+    can `handle.connect_peer(...)` immediately after adding the magnet.
+    """
+
+    def __init__(self, peer_id: int) -> None:
+        if lt is None:
+            raise RuntimeError("libtorrent is not installed")
+        self._peer_id = peer_id
+        self._session = lt.session()
+        # Per-peer port so co-located peers don't collide. The mod keeps it
+        # bounded; collisions between distinct processes are rare enough
+        # and libtorrent picks the next free port if occupied.
+        port = LT_PORT_MIN + (os.getpid() % (LT_PORT_MAX - LT_PORT_MIN))
+        try:
+            self._session.listen_on(port, port + 20)
+        except Exception:
+            self._session.listen_on(LT_PORT_MIN, LT_PORT_MAX)
+
+        settings = self._session.get_settings()
+        # Keep DHT + LSD on so non-localhost scenarios still work, but
+        # don't rely on them in the happy path.
+        settings["enable_dht"] = True
+        settings["enable_lsd"] = True
+        # Allow peers on the same LAN / loopback to connect.
+        settings["allow_multiple_connections_per_ip"] = True
+        self._session.apply_settings(settings)
+
+        # arm_name -> handle (seed) kept alive for the duration of the run.
+        self._seed_handles: dict[str, Any] = {}
+        # arm_name -> magnet URI we published (for gossip).
+        self._magnets: dict[str, str] = {}
+
+    # ----------------------------------------------------------- seed
+
+    def seed_model(self, arm_name: str, model_path: Path) -> str | None:
+        """Create a .torrent for `model_path`, add it as a seed, return magnet.
+
+        Idempotent per arm_name. Returns the magnet URI on success.
+        """
+        if arm_name in self._magnets:
+            return self._magnets[arm_name]
+
+        try:
+            torrent_path = Path(str(model_path) + ".torrent")
+            if not torrent_path.exists():
+                fs = lt.file_storage()
+                lt.add_files(fs, str(model_path))
+                t = lt.create_torrent(fs)
+                t.set_creator("LTR-MAB seeder")
+                lt.set_piece_hashes(t, str(model_path.parent))
+                torrent_path.write_bytes(lt.bencode(t.generate()))
+
+            info = lt.torrent_info(str(torrent_path))
+            handle = self._session.add_torrent({
+                "ti": info,
+                "save_path": str(model_path.parent),
+            })
+            # Ensure we're in seed-only mode for files already complete.
+            handle.flags = handle.flags  # no-op; keeping libtorrent happy
+            magnet = lt.make_magnet_uri(info)
+            self._seed_handles[arm_name] = handle
+            self._magnets[arm_name] = magnet
+            log(f"[Peer {self._peer_id}] SEEDING {arm_name} magnet={magnet[:80]}…")
+            return magnet
+        except Exception as exc:
+            log(f"[Peer {self._peer_id}] seed_model({arm_name}) failed: {exc}")
+            return None
+
+    def magnet_for(self, arm_name: str) -> str | None:
+        return self._magnets.get(arm_name)
+
+    def listen_endpoint(self) -> tuple[str, int]:
+        """Return the (host, port) other peers should use in connect_peer.
+
+        We always advertise 127.0.0.1 because the pull-based design
+        currently only exercises localhost-to-localhost transfers; DHT
+        handles WAN discovery for the rare non-local case.
+        """
+        port = self._session.listen_port()
+        return ("127.0.0.1", int(port))
+
+    # --------------------------------------------------------- download
+
+    async def download(
+        self,
+        magnet: str,
+        save_dir: Path,
+        extra_peer: tuple[str, int] | None,
+        timeout_s: float = LT_DOWNLOAD_TIMEOUT_S,
+    ) -> Path | None:
+        """Download `magnet` into `save_dir`; return the resulting file path.
+
+        If `extra_peer` is given, it's connected explicitly so localhost
+        transfers complete without waiting on DHT / tracker.
+        """
+        save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            params = lt.parse_magnet_uri(magnet)
+        except Exception as exc:
+            log(f"[Peer {self._peer_id}] bad magnet: {exc}")
+            return None
+        params.save_path = str(save_dir)
+        try:
+            handle = self._session.add_torrent(params)
+        except Exception as exc:
+            log(f"[Peer {self._peer_id}] add_torrent failed: {exc}")
+            return None
+
+        if extra_peer is not None:
+            try:
+                handle.connect_peer(extra_peer)
+            except Exception as exc:
+                log(f"[Peer {self._peer_id}] connect_peer({extra_peer}) failed: {exc}")
+
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        metadata_ready = False
+        while asyncio.get_event_loop().time() < deadline:
+            status = handle.status()
+            if not metadata_ready and status.has_metadata:
+                metadata_ready = True
+                # Once metadata is in, try re-seeding the connect_peer hint
+                # in case the first attempt raced metadata arrival.
+                if extra_peer is not None:
+                    try:
+                        handle.connect_peer(extra_peer)
+                    except Exception:
+                        pass
+            if status.is_seeding or status.progress >= 1.0:
+                # Find the saved file. Single-file torrent → info name.
+                ti = handle.torrent_file()
+                if ti is None:
+                    await asyncio.sleep(0.2)
+                    continue
+                files = ti.files()
+                rel = files.file_path(0)
+                return save_dir / rel
+            await asyncio.sleep(0.3)
+
+        log(f"[Peer {self._peer_id}] download timed out for {magnet[:60]}…")
+        try:
+            self._session.remove_torrent(handle)
+        except Exception:
+            pass
+        return None
+
+    def shutdown(self) -> None:
+        try:
+            for handle in list(self._seed_handles.values()):
+                try:
+                    self._session.remove_torrent(handle)
+                except Exception:
+                    pass
+            self._seed_handles.clear()
+            self._magnets.clear()
+            self._session = None
+        except Exception:
+            pass
+
+
 class LTRMABCommunity(Community):
     """Community for LTR model selection via MAB with real models."""
     community_id = os.urandom(20)
@@ -166,18 +414,38 @@ class LTRMABCommunity(Community):
         self.add_message_handler(ExclusionMessage, self.on_exclusion)
         self.add_message_handler(NewModelMessage, self.on_new_model)
 
+        # Model names heard about via gossip advertisements but whose
+        # torrent we're still downloading. Held out of the bandit until
+        # the file lands so the MAB doesn't try to score an arm whose
+        # predictions we can't compute.
+        self._announced_models: set[str] = set()
+        # Per-model state of in-flight downloads so duplicate
+        # advertisements from multiple peers don't start parallel downloads.
+        self._downloading: set[str] = set()
+
         # Assign peer ID
         LTRMABCommunity._peer_counter += 1
         self.peer_id = LTRMABCommunity._peer_counter
+
+        # Libtorrent seeder/leecher for model artefact transfer.
+        self.seeder = TorrentSeeder(self.peer_id)
+        # Cached ad entries for arms we're currently seeding — rebuilt
+        # from self.seeder each gossip cycle.
+        self._my_advertisements: dict[str, dict] = {}
 
         # Initialize MAB with initial models (excludes hot-swap model)
         model_names = list(self._state["initial_model_names"])
         algorithm = self._state.get("algorithm", "ucb1")
         peer_id = str(self.peer_id)
+        seed = self._state.get("seed", SEED)
+        # Per-peer RNG for gossip neighbor selection. Each peer gets its own
+        # independent stream so two peers picking neighbors in the same tick
+        # don't consume from the same draw sequence.
+        self._rng = _derive_rng(seed, peer_id, "community")
         if algorithm == "thompson":
-            self.bandit = ThompsonSampling(model_names, peer_id=peer_id)
+            self.bandit = ThompsonSampling(model_names, peer_id=peer_id, seed=seed)
         else:
-            self.bandit = UCB1(model_names, c=2.0, peer_id=peer_id)
+            self.bandit = UCB1(model_names, c=2.0, peer_id=peer_id, seed=seed)
         self.active_models = set(model_names)
         self.excluded_models = set()
 
@@ -192,6 +460,11 @@ class LTRMABCommunity(Community):
         self.cumulative_scores = {1: 0.0, 5: 0.0, 10: 0.0}
         self.round_scores = {1: 0.0, 5: 0.0, 10: 0.0}
         self.round_queries = 0
+
+        # Seed every model we already have on disk. Their magnets will
+        # ride the very first MABStatsMessage so late-joiners pick them up.
+        for name in model_names:
+            self._seed_existing_model(name)
 
     @classmethod
     def set_state(cls, state: dict):
@@ -250,18 +523,53 @@ class LTRMABCommunity(Community):
         avg_10 = self.round_scores[10] / self.round_queries
         return f"{m}@1={avg_1:.3f}, {m}@5={avg_5:.3f}, {m}@10={avg_10:.3f}"
 
+    def _seed_existing_model(self, arm_name: str, lookup_name: str | None = None) -> None:
+        """Find the on-disk file for `lookup_name` (defaults to `arm_name`),
+        seed it via libtorrent, cache its ad under `arm_name`. The advertised
+        metadata's `name` field is rewritten to `arm_name` so receivers store
+        and key everything under the unique name.
+        """
+        search_name = lookup_name or arm_name
+        model_path = _find_model_file_by_name(search_name)
+        if model_path is None:
+            log(f"[Peer {self.peer_id}] seed: no on-disk file for arm '{search_name}' (scanned {MODELS_DIR})")
+            return
+        magnet = self.seeder.seed_model(arm_name, model_path)
+        if not magnet:
+            log(f"[Peer {self.peer_id}] seed: seeder returned no magnet for {arm_name} ({model_path})")
+            return
+        try:
+            metadata = ModelMetadata.load(model_path)
+            meta_dict = dict(metadata.__dict__)
+            meta_dict["name"] = arm_name
+            metadata_json = json.dumps(meta_dict)
+        except Exception as exc:
+            log(f"[Peer {self.peer_id}] seed: missing/unreadable meta for {search_name}: {exc}")
+            return
+        host, port = self.seeder.listen_endpoint()
+        self._my_advertisements[arm_name] = {
+            "magnet": magnet,
+            "model_type": metadata.type,
+            "metadata_json": metadata_json,
+            "host": host,
+            "port": port,
+        }
+        log(f"[Peer {self.peer_id}] seed: advertised {arm_name} (magnet={magnet[:60]}…, endpoint={host}:{port})")
+
     async def send_gossip(self) -> int:
-        """Send per-originator CRDT tables to a random subset of peers."""
+        """Send per-originator CRDT tables + model advertisements to a random subset of peers."""
         peers = self.get_peers()
         if not peers:
             return 0
 
         if len(peers) > MAX_GOSSIP_PEERS:
-            peers = list(np.random.choice(peers, size=MAX_GOSSIP_PEERS, replace=False))
+            idx = self._rng.choice(len(peers), size=MAX_GOSSIP_PEERS, replace=False)
+            peers = [peers[i] for i in idx]
 
         msg = MABStatsMessage(
             sender_id=self.peer_id,
             tables=json.dumps(self.bandit.get_originator_tables()),
+            advertisements=json.dumps(self._my_advertisements),
         )
 
         for peer in peers:
@@ -271,8 +579,13 @@ class LTRMABCommunity(Community):
 
     @lazy_wrapper(MABStatsMessage)
     def on_mab_stats(self, peer: Peer, payload: MABStatsMessage) -> None:
-        """Merge per-originator CRDT tables received from a peer."""
+        """Merge per-originator CRDT tables + kick off torrent downloads for
+        newly-advertised arms we don't yet have."""
         remote_tables: dict[str, dict[str, dict]] = json.loads(payload.tables)
+        try:
+            advertisements: dict[str, dict] = json.loads(payload.advertisements or "{}")
+        except Exception:
+            advertisements = {}
 
         merge_details = []
 
@@ -295,19 +608,49 @@ class LTRMABCommunity(Community):
                 if new_n > old_n:
                     merge_details.append(f"{arm}: {old_n}->{new_n} pulls")
             else:
-                # Arm only the neighbor knows — adopt it
-                self.bandit.add_arm(arm, remote_table=remote_entries)
-                self.active_models.add(arm)
-                n = sum(e.pulls for e in self.bandit.tables[arm].values())
-                merge_details.append(f"{arm}: new arm, {n} pulls inherited")
-                if self.on_event:
-                    self.on_event(
-                        f"NEW ARM via gossip from Peer {payload.sender_id}: {arm} ({n} discounted pulls)",
-                        "round",
-                    )
+                # Arm is advertised but we don't have its bytes. If the
+                # advertisement includes a magnet, kick off a torrent
+                # download; otherwise just note that we've heard about it
+                # and wait for a peer with a magnet to advertise.
+                ad = advertisements.get(arm)
+                if ad and "magnet" in ad:
+                    merge_details.append(f"{arm}: announced (downloading)")
+                    self._announced_models.add(arm)
+                    self._start_download_if_idle(arm, ad, payload.sender_id)
+                else:
+                    merge_details.append(f"{arm}: announced (no magnet yet)")
+                    self._announced_models.add(arm)
 
         if merge_details:
             log(f"[Peer {self.peer_id}] GOSSIP RECEIVED from Peer {payload.sender_id}: merged [{', '.join(merge_details)}]")
+
+    def _start_download_if_idle(self, arm_name: str, ad: dict, sender_id: int) -> None:
+        """Dispatch a torrent download for `arm_name` unless one is already running."""
+        if arm_name in self.bandit.tables:
+            self._announced_models.discard(arm_name)
+            return
+        if arm_name in self._downloading:
+            return
+        self._downloading.add(arm_name)
+
+        magnet = ad["magnet"]
+        metadata_json = ad.get("metadata_json", "{}")
+        model_type = ad.get("model_type", "")
+        host = ad.get("host")
+        port = ad.get("port")
+        extra_peer = (host, int(port)) if host and port else None
+
+        if self.on_event:
+            self.on_event(
+                f"Downloading model {arm_name} from Peer {sender_id}…",
+                "info",
+            )
+
+        loop = asyncio.get_event_loop()
+        loop.create_task(self._download_and_materialize(
+            arm_name, magnet, metadata_json, model_type, extra_peer, sender_id,
+            save_dir=DOWNLOADS_DIR,
+        ))
 
     def _get_mean_reward(self, stats_entry: dict) -> float:
         """Get mean/expected reward from stats, works with both UCB1 and Thompson."""
@@ -378,7 +721,8 @@ class LTRMABCommunity(Community):
         )
         peers = self.get_peers()
         if len(peers) > MAX_GOSSIP_PEERS:
-            peers = list(np.random.choice(peers, size=MAX_GOSSIP_PEERS, replace=False))
+            idx = self._rng.choice(len(peers), size=MAX_GOSSIP_PEERS, replace=False)
+            peers = [peers[i] for i in idx]
         for peer in peers:
             self.ez_send(peer, msg)
 
@@ -392,16 +736,18 @@ class LTRMABCommunity(Community):
             log(f"[Peer {self.peer_id}]   Reason: {payload.reason}")
 
     def add_model(self, model_name: str, remote_table: dict[str, OriginatorEntry] | None = None) -> None:
-        """Hot-swap: add a new model to this peer's MAB.
+        """Hot-swap: add a new model to this peer's MAB and seed its torrent.
 
         If remote_table is provided (received via gossip), the arm is seeded
         with the neighbor's originator entries instead of a blank prior.
         """
         if model_name in self.bandit.tables:
+            log(f"[Peer {self.peer_id}] add_model({model_name}): already in bandit.tables, skipping")
             return
         state = self._state
         if model_name not in state["model_scores"]:
-            log(f"[Peer {self.peer_id}] Cannot add {model_name}: no precomputed scores")
+            log(f"[Peer {self.peer_id}] Cannot add {model_name}: no precomputed scores "
+                f"(available: {sorted(state.get('model_scores', {}).keys())})")
             return
 
         self.bandit.add_arm(model_name, remote_table=remote_table)
@@ -409,35 +755,187 @@ class LTRMABCommunity(Community):
         log(f"[Peer {self.peer_id}] HOT-SWAP: Added {model_name} to MAB")
         log(f"[Peer {self.peer_id}]   Active models: {sorted(self.active_models)}")
 
-    async def propose_model(self, model_name: str) -> None:
-        """Propose a new model: add locally (fresh prior) and announce to neighbors."""
-        self.add_model(model_name)
+        # Seed the model file so downstream peers can pull it via torrent.
+        self._seed_existing_model(model_name)
+
+    async def propose_model(self, base_model_name: str) -> None:
+        """Register a model locally under a unique, per-peer name, ensure its
+        magnet is ready, then announce it to peers. Every proposal is treated
+        as a distinct arm (even if two peers propose the same base model, or
+        the same peer re-proposes it after leave/rejoin), so the arm name is
+        suffixed with a random token. A collision would require two 32-bit
+        random draws to match, which is astronomically unlikely at the
+        proposal rates we care about.
+
+        The announcement is deferred until seeding succeeds so receivers
+        always get a usable advertisement on the same tick."""
+        rand_suffix = os.urandom(4).hex()
+        unique_name = f"{base_model_name}@{rand_suffix}"
+
+        state = self._state
+        if unique_name not in state.get("model_scores", {}):
+            if base_model_name not in state.get("model_scores", {}):
+                log(f"[Peer {self.peer_id}] PROPOSE ABORTED: base model '{base_model_name}' "
+                    f"has no precomputed scores; cannot register {unique_name}")
+                return
+            state["model_scores"][unique_name] = state["model_scores"][base_model_name]
+            if "models" in state and base_model_name in state["models"]:
+                state.setdefault("models", {})[unique_name] = state["models"][base_model_name]
+
+        if unique_name in self.bandit.tables:
+            log(f"[Peer {self.peer_id}] PROPOSE skipped: {unique_name} already active")
+            return
+
+        self.bandit.add_arm(unique_name)
+        self.active_models.add(unique_name)
+        log(f"[Peer {self.peer_id}] HOT-SWAP: Added {unique_name} to MAB (base={base_model_name})")
+
+        self._seed_existing_model(unique_name, lookup_name=base_model_name)
+        if unique_name not in self._my_advertisements:
+            await asyncio.sleep(0.1)
+            self._seed_existing_model(unique_name, lookup_name=base_model_name)
+
+        ad = self._my_advertisements.get(unique_name)
+        if ad is None:
+            log(f"[Peer {self.peer_id}] PROPOSE ABORTED: no magnet available for {unique_name} "
+                f"— peers cannot pull the file, skipping announcement")
+            return
+
         peers = self.get_peers()
+        log(f"[Peer {self.peer_id}] PROPOSED {unique_name} — announcing to {len(peers)} peer(s) "
+            f"with magnet ready")
+        msg = NewModelMessage(
+            sender_id=self.peer_id,
+            model_name=unique_name,
+            magnet=ad["magnet"],
+            metadata_json=ad["metadata_json"],
+            model_type=ad["model_type"],
+            host=ad["host"],
+            port=int(ad["port"]),
+        )
         if len(peers) > MAX_GOSSIP_PEERS:
-            peers = list(np.random.choice(peers, size=MAX_GOSSIP_PEERS, replace=False))
-        msg = NewModelMessage(sender_id=self.peer_id, model_name=model_name)
-        for peer in peers:
-            self.ez_send(peer, msg)
-        log(f"[Peer {self.peer_id}] PROPOSED {model_name} to {len(peers)} peers")
+            idx = self._rng.choice(len(peers), size=MAX_GOSSIP_PEERS, replace=False)
+            peers = [peers[i] for i in idx]
+        for p in peers:
+            self.ez_send(p, msg)
+
+    async def _download_and_materialize(
+        self,
+        model_name: str,
+        magnet: str,
+        metadata_json: str,
+        model_type: str,
+        extra_peer: tuple[str, int] | None,
+        sender_id: int,
+        save_dir: Path = MODELS_DIR,
+    ) -> None:
+        """Download the model file via libtorrent, then load + score + add_model."""
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+            model_path = await self.seeder.download(magnet, save_dir, extra_peer)
+            if model_path is None:
+                log(f"[Peer {self.peer_id}] DOWNLOAD FAILED for {model_name} (timeout)")
+                if self.on_event:
+                    self.on_event(f"Failed to download {model_name}: timeout", "info")
+                return
+
+            loop = asyncio.get_event_loop()
+            try:
+                model = await loop.run_in_executor(
+                    None,
+                    _write_meta_and_load,
+                    model_path, metadata_json,
+                )
+            except Exception as exc:
+                log(f"[Peer {self.peer_id}] LOAD FAILED for {model_name}: {exc}")
+                if self.on_event:
+                    self.on_event(f"Failed to load {model_name}: {exc}", "info")
+                return
+
+            state = self._state
+            if "X_test" not in state or "y_test" not in state:
+                log(f"[Peer {self.peer_id}] shared state missing X_test/y_test; cannot score {model_name}")
+                return
+
+            try:
+                scores = await loop.run_in_executor(
+                    None,
+                    precompute_model_scores,
+                    {model_name: model},
+                    state["X_test"],
+                    state["y_test"],
+                    state["query_boundaries"],
+                    [1, 5, 10],
+                    state.get("metric", "ndcg"),
+                )
+            except Exception as exc:
+                log(f"[Peer {self.peer_id}] PRECOMPUTE FAILED for {model_name}: {exc}")
+                if self.on_event:
+                    self.on_event(f"Failed to score {model_name}: {exc}", "info")
+                return
+
+            state["models"][model_name] = model
+            state["model_scores"][model_name] = scores[model_name]
+
+            self.add_model(model_name)
+            self._announced_models.discard(model_name)
+            if self.on_event:
+                self.on_event(
+                    f"NEW ARM via torrent from Peer {sender_id}: {model_name}",
+                    "round",
+                )
+        finally:
+            self._downloading.discard(model_name)
 
     @lazy_wrapper(NewModelMessage)
     def on_new_model(self, peer: Peer, payload: NewModelMessage) -> None:
-        """Handle new model announcement from a peer and forward to neighbors."""
-        if payload.model_name in self.bandit.tables:
+        """Handle new model announcement from a peer: pull the file via the
+        advertised magnet (into DOWNLOADS_DIR), materialise it, then forward
+        the announcement to neighbours so it reaches the rest of the swarm."""
+        model_name = payload.model_name
+        log(f"[Peer {self.peer_id}] on_new_model: {model_name} from Peer {payload.sender_id} "
+            f"(already_have={model_name in self.bandit.tables})")
+        if model_name in self.bandit.tables:
             return
-        log(f"[Peer {self.peer_id}] RECEIVED new model announcement: {payload.model_name} from Peer {payload.sender_id}")
-        self.add_model(payload.model_name)
+        if model_name in self._downloading:
+            return
+
         if self.on_event:
             self.on_event(
-                f"NEW ARM announced by Peer {payload.sender_id}: {payload.model_name}",
+                f"NEW ARM announced by Peer {payload.sender_id}: {model_name} — downloading",
                 "round",
             )
 
-        # Forward to neighbors (epidemic gossip)
-        msg = NewModelMessage(sender_id=self.peer_id, model_name=payload.model_name)
+        self._downloading.add(model_name)
+        self._announced_models.add(model_name)
+        extra_peer = (payload.host, int(payload.port)) if payload.host and payload.port else None
+        asyncio.get_event_loop().create_task(
+            self._download_and_materialize(
+                model_name,
+                payload.magnet,
+                payload.metadata_json,
+                payload.model_type,
+                extra_peer,
+                payload.sender_id,
+                save_dir=DOWNLOADS_DIR,
+            )
+        )
+
+        # Forward to neighbors (epidemic gossip) — keep the magnet + endpoint
+        # so the next hop can also pull directly.
+        msg = NewModelMessage(
+            sender_id=self.peer_id,
+            model_name=model_name,
+            magnet=payload.magnet,
+            metadata_json=payload.metadata_json,
+            model_type=payload.model_type,
+            host=payload.host,
+            port=int(payload.port),
+        )
         peers = self.get_peers()
         if len(peers) > MAX_GOSSIP_PEERS:
-            peers = list(np.random.choice(peers, size=MAX_GOSSIP_PEERS, replace=False))
+            idx = self._rng.choice(len(peers), size=MAX_GOSSIP_PEERS, replace=False)
+            peers = [peers[i] for i in idx]
         for p in peers:
             self.ez_send(p, msg)
 
@@ -481,8 +979,12 @@ async def run_local_experiment(
     algorithm: str = "ucb1",
     metric: str = "ndcg",
     dashboard_state=None,
+    seed: int | None = None,
 ) -> None:
     """Run local experiment with N peers and R rounds."""
+    # Caller can override the module-level SEED for per-run reproducibility.
+    if seed is None:
+        seed = SEED
     # Stub dashboard if not provided (CLI mode)
     if dashboard_state is None:
         class _Noop:
@@ -578,6 +1080,7 @@ async def run_local_experiment(
         "num_queries": len(query_boundaries),
         "algorithm": algorithm,
         "metric": metric,
+        "seed": seed,
     }
     LTRMABCommunity.set_state(state)
 
@@ -614,9 +1117,11 @@ async def run_local_experiment(
     for comm in communities:
         log(f"Peer {comm.peer_id}: connected to {len(comm.get_peers())} peers")
 
-    # Query pool
+    # Query pool. One RNG per peer so seed 0 replays identical query streams;
+    # the driver uses its own RNG for hot-swap proposer selection.
     total_queries = len(query_boundaries)
-    rng = np.random.default_rng()
+    per_peer_rngs: dict[int, np.random.Generator] = {}
+    driver_rng = _derive_rng(seed, "driver", "hotswap")
 
     # Run rounds
     for round_num in range(1, num_rounds + 1):
@@ -637,7 +1142,14 @@ async def run_local_experiment(
             log(f"[Peer {comm.peer_id}] Processing {queries_per_round} queries...")
 
             replace = queries_per_round > total_queries
-            query_indices = rng.choice(total_queries, size=queries_per_round, replace=replace)
+            # One stable Generator per peer keyed by peer_id — reused across
+            # rounds so the query sequence is deterministic given the seed.
+            if comm.peer_id not in per_peer_rngs:
+                per_peer_rngs[comm.peer_id] = _derive_rng(
+                    seed, str(comm.peer_id), "queries"
+                )
+            peer_rng = per_peer_rngs[comm.peer_id]
+            query_indices = peer_rng.choice(total_queries, size=queries_per_round, replace=replace)
             for query_idx in query_indices:
                 comm.process_query(int(query_idx))
 
@@ -646,7 +1158,7 @@ async def run_local_experiment(
 
         # Hot-swap: a random peer proposes XGBoost at the configured round
         if hotswap_round > 0 and round_num == hotswap_round and hotswap_model_name:
-            proposer = communities[rng.integers(len(communities))]
+            proposer = communities[int(driver_rng.integers(len(communities)))]
             log(f"\n{'#'*70}")
             log(f"HOT-SWAP: Peer {proposer.peer_id} proposing {hotswap_model_name}")
             log(f"{'#'*70}")
@@ -804,6 +1316,7 @@ if __name__ == "__main__":
     parser.add_argument("--hotswap-round", type=int, default=0, help="Round at which XGBoost is proposed (0=disabled)")
     parser.add_argument("--algorithm", choices=["ucb1", "thompson"], default="ucb1", help="MAB algorithm")
     parser.add_argument("--metric", choices=["ndcg", "mrr"], default="ndcg", help="Reward metric")
+    parser.add_argument("--seed", type=int, default=None, help="Master RNG seed (None → module default SEED)")
     args = parser.parse_args()
 
     run(run_local_experiment(
@@ -815,4 +1328,5 @@ if __name__ == "__main__":
         hotswap_round=args.hotswap_round,
         algorithm=args.algorithm,
         metric=args.metric,
+        seed=args.seed,
     ))

@@ -135,6 +135,7 @@ class Application(QMainWindow):
 
         self.experiment_page = LTRCommunityWidget()
         self.experiment_page.run_requested.connect(self._on_experiment_run_requested)
+        self.experiment_page.stop_requested.connect(self._on_experiment_stop_requested)
         self._ltr_thread: Optional[LTRCommunityThread] = None
 
         self.content_stack.addWidget(self.torrents_page)
@@ -376,10 +377,10 @@ class Application(QMainWindow):
         dataset: str,
         algorithm: str,
         metric: str,
-        rounds: int,
         queries: int,
         gossip: bool,
-        hotswap_round: int,
+        hotswap_tick: int,
+        hotswap_model: str,
     ) -> None:
         """Spawn a new LTRCommunityThread for this peer's distributed experiment."""
         if self._ltr_thread is not None:
@@ -391,10 +392,10 @@ class Application(QMainWindow):
             dataset_id=dataset,
             algorithm=algorithm,
             metric=metric,
-            num_rounds=rounds,
             queries_per_round=queries,
             gossip_enabled=gossip,
-            hotswap_round=hotswap_round,
+            hotswap_round=hotswap_tick,
+            hotswap_model=hotswap_model,
         )
         thread.started_ok.connect(
             self.experiment_page.on_started, type=Qt.ConnectionType.QueuedConnection
@@ -415,6 +416,10 @@ class Application(QMainWindow):
 
         self._ltr_thread = thread
         thread.start()
+
+    def _on_experiment_stop_requested(self) -> None:
+        if self._ltr_thread is not None:
+            self._ltr_thread.stop()
 
     def _on_ltr_thread_finished(self) -> None:
         # Allow the next RUN click to spawn a fresh thread

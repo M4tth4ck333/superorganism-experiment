@@ -28,12 +28,39 @@ if str(_BENCH_DIR) not in sys.path:
 # behind NAT, especially for two peers on the same host).
 _PEER_REGISTRY_PATH = _BENCH_DIR / ".peer_registry.json"
 
+# Number of consecutive gossip ticks an originator can be absent before its
+# CRDT entries are pruned from local arm tables. A departed peer's evidence
+# stops influencing posteriors after this many ticks of silence.
+STALE_ORIGINATOR_TTL = 20
+
+# Registry entries older than this are treated as dead (process crashed before
+# cleanup). Live peers heartbeat by rewriting their own entry periodically.
+_REGISTRY_STALE_SECONDS = 30
+_REGISTRY_HEARTBEAT_SECONDS = 5
+
 
 def _read_peer_registry() -> dict:
+    """Load registry and drop entries whose heartbeat timestamp is stale.
+
+    Format: { pid: [host, port, ts] }. Legacy entries ([host, port]) are
+    treated as stale and dropped.
+    """
     try:
-        return json.loads(_PEER_REGISTRY_PATH.read_text())
+        raw = json.loads(_PEER_REGISTRY_PATH.read_text())
     except Exception:
         return {}
+    now = time.time()
+    fresh: dict = {}
+    for pid, entry in raw.items():
+        if not isinstance(entry, list) or len(entry) < 3:
+            continue
+        ts = entry[2]
+        if not isinstance(ts, (int, float)):
+            continue
+        if now - ts > _REGISTRY_STALE_SECONDS:
+            continue
+        fresh[pid] = entry
+    return fresh
 
 
 def _write_peer_registry(registry: dict) -> None:
@@ -41,6 +68,17 @@ def _write_peer_registry(registry: dict) -> None:
         _PEER_REGISTRY_PATH.write_text(json.dumps(registry))
     except Exception:
         pass
+
+
+def _register_self(pid: str, host: str, port: int) -> dict:
+    """Prune stale entries, register this peer with a current timestamp, and
+    return the pruned registry snapshot (excluding self) so the caller can
+    walk to any currently-live peers.
+    """
+    registry = _read_peer_registry()
+    registry[pid] = [host, port, time.time()]
+    _write_peer_registry(registry)
+    return {p: e for p, e in registry.items() if p != pid}
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +198,10 @@ class LTRCommunityThread(QThread):
         dataset_id: str,
         algorithm: str,
         metric: str = "ndcg",
-        num_rounds: int = 5,
         queries_per_round: int = 100,
         gossip_enabled: bool = True,
         hotswap_round: int = 0,
+        hotswap_model: str = "",
         peer_port: int = 0,          # 0 → pick a free port
         key_path: Optional[str] = None,
         bootstrap_addresses: Optional[list[tuple[str, int]]] = None,
@@ -173,10 +211,15 @@ class LTRCommunityThread(QThread):
         self.dataset_id        = dataset_id
         self.algorithm         = algorithm
         self.metric            = metric
-        self.num_rounds        = num_rounds
+        # `queries_per_round` sets the tick size: queries processed between
+        # each gossip + exclusion check + snapshot. `hotswap_round` triggers
+        # a one-shot model proposal at that tick (0 = disabled).
         self.queries_per_round = queries_per_round
         self.gossip_enabled    = gossip_enabled
         self.hotswap_round     = hotswap_round
+        # Name of the arm to propose at hot-swap time. Empty string falls
+        # back to auto-detecting an xgboost model (legacy behaviour).
+        self.hotswap_model     = hotswap_model
         self.peer_port         = peer_port
         self.key_path          = key_path or str(
             _BENCH_DIR / f"peer_community_{os.getpid()}.pem"
@@ -216,7 +259,9 @@ class LTRCommunityThread(QThread):
             GOSSIP_ROUNDS,
             GOSSIP_DELAY,
             PEER_DISCOVERY_WAIT,
+            SEED,
         )
+        from mab import _derive_rng
         from ipv8.configuration import (
             ConfigBuilder, Strategy, WalkerDefinition, default_bootstrap_defs,
         )
@@ -258,12 +303,28 @@ class LTRCommunityThread(QThread):
         }
 
         hotswap_model_name = None
-        for name in models:
-            if "xgboost" in name.lower() or "xgb" in name.lower():
-                hotswap_model_name = name
-                break
+        if self.hotswap_round > 0:
+            if self.hotswap_model and self.hotswap_model in models:
+                hotswap_model_name = self.hotswap_model
+            elif self.hotswap_model:
+                state.event(
+                    f"Hot-swap model '{self.hotswap_model}' not found in loaded "
+                    f"models; hot-swap disabled for this peer.",
+                    "info",
+                )
+            else:
+                # Legacy fallback: pick an xgboost variant if present.
+                for name in models:
+                    if "xgboost" in name.lower() or "xgb" in name.lower():
+                        hotswap_model_name = name
+                        break
 
-        initial_model_names = [n for n in models if n != hotswap_model_name]
+        initial_model_names = [
+            n for n in models
+            if n != hotswap_model_name
+            and "xgboost" not in n.lower()
+            and "xgb" not in n.lower()
+        ]
 
         # ── Shared community state ────────────────────────────────────────
         shared = {
@@ -274,6 +335,10 @@ class LTRCommunityThread(QThread):
             "num_queries": len(query_boundaries),
             "algorithm": self.algorithm,
             "metric": self.metric,
+            # Kept around so models received via P2P transfer can be scored
+            # against the same test set without re-loading the dataset.
+            "X_test": X_test,
+            "y_test": y_test,
         }
         LTRMABCommunity.set_state(shared)
         LTRMABCommunity._peer_counter = 0
@@ -286,9 +351,11 @@ class LTRCommunityThread(QThread):
             "dataset": self.dataset_id,
             "algorithm": self.algorithm,
             "metric": self.metric,
-            "num_rounds": self.num_rounds,
+            # num_rounds is unbounded in continuous mode; 0 signals "∞" to UI.
+            "num_rounds": 0,
             "queries_per_round": self.queries_per_round,
             "gossip_enabled": self.gossip_enabled,
+            "continuous": True,
         }
         state.oracle = oracle
 
@@ -332,27 +399,37 @@ class LTRCommunityThread(QThread):
             state.event(f"Peer started (id={community.peer_id}). Discovering network…", "info")
 
             my_pid = str(os.getpid())
-            registry = _read_peer_registry()
-            known_peers = [
-                tuple(addr) for pid, addr in registry.items() if pid != my_pid
-            ]
-            registry[my_pid] = ["127.0.0.1", port]
-            _write_peer_registry(registry)
+            known_entries = _register_self(my_pid, "127.0.0.1", port)
+            walked: set[tuple[str, int]] = set()
 
-            for addr in known_peers:
-                host, peer_port = addr[0], int(addr[1])
-                state.event(f"Walking to known local peer at {host}:{peer_port}", "info")
-                try:
-                    community.walk_to((host, peer_port))
-                except Exception as exc:
-                    state.event(f"walk_to({host}:{peer_port}) failed: {exc}", "info")
+            def _walk_new_peers(entries: dict) -> None:
+                for _pid, entry in entries.items():
+                    host, peer_port = entry[0], int(entry[1])
+                    addr = (host, peer_port)
+                    if addr in walked:
+                        continue
+                    walked.add(addr)
+                    state.event(f"Walking to known local peer at {host}:{peer_port}", "info")
+                    try:
+                        community.walk_to(addr)
+                    except Exception as exc:
+                        state.event(f"walk_to({host}:{peer_port}) failed: {exc}", "info")
 
-            # Wait for peer discovery
+            _walk_new_peers(known_entries)
+
+            # Wait for peer discovery, re-reading the registry each tick so
+            # we notice peers that started after us, and heartbeating our own
+            # entry so they don't treat us as stale.
             DISCOVERY_WAIT = 10  # seconds
+            last_heartbeat = time.time()
             for elapsed_s in range(1, DISCOVERY_WAIT + 1):
                 if self._stop_event.is_set():
                     return
                 await asyncio.sleep(1)
+                if time.time() - last_heartbeat >= _REGISTRY_HEARTBEAT_SECONDS:
+                    _register_self(my_pid, "127.0.0.1", port)
+                    last_heartbeat = time.time()
+                _walk_new_peers(_register_self(my_pid, "127.0.0.1", port))
                 n = len(community.get_peers())
                 state.event(
                     f"Discovery {elapsed_s}/{DISCOVERY_WAIT}s — {n} network peer(s) found so far",
@@ -372,54 +449,79 @@ class LTRCommunityThread(QThread):
 
             self.started_ok.emit()
 
-            # ── Query / gossip loop ───────────────────────────────────────
-            rng = np.random.default_rng()
+            # ── Continuous query / gossip loop ────────────────────────────
+            # B2: no fixed round count. The peer runs indefinitely — queries
+            # are processed continuously, and gossip + exclusion checks fire
+            # on each `tick` (every `queries_per_round` queries). Each tick
+            # produces one entry in `round_history` so the existing UI (which
+            # plots per-round snapshots) keeps working unchanged.
+            # Seeded query sampler. In the threaded runner we don't know our
+            # own peer_id ahead of time (it's assigned when the community is
+            # created), so we tag with pid to give each running instance a
+            # distinct-yet-deterministic stream under a shared SEED.
+            rng = _derive_rng(SEED, str(os.getpid()), "thread_queries")
             total_queries = len(query_boundaries)
+            tick = 0
+            queries_since_tick = 0
+            QUERY_BATCH = 10               # queries per scheduling slice
+            INTER_QUERY_SLEEP = 0.01       # yield to the event loop
+            hotswap_done = False
 
-            for round_num in range(1, self.num_rounds + 1):
-                if self._stop_event.is_set():
-                    break
-                state.current_round = round_num
-                state.event(f"Round {round_num}/{self.num_rounds} started", "round")
+            state.phase = "querying"
+            state.event("Entering continuous operation — no fixed round count.", "info")
 
-                community.reset_round_stats()
-
-                # --- Query phase ---
-                state.phase = "querying"
-                state.event(f"Querying ({self.queries_per_round} queries)…", "info")
-                replace = self.queries_per_round > total_queries
+            while not self._stop_event.is_set():
+                # --- Process a small batch of queries ---
+                batch = min(QUERY_BATCH, self.queries_per_round - queries_since_tick)
+                if batch <= 0:
+                    batch = 1
+                replace = batch > total_queries
                 query_indices = rng.choice(
-                    total_queries, size=self.queries_per_round, replace=replace
+                    total_queries, size=batch, replace=replace
                 )
                 for qi in query_indices:
                     community.process_query(int(qi))
-                await asyncio.sleep(0.01)
-                state._emit_snapshot()
+                queries_since_tick += batch
+                await asyncio.sleep(INTER_QUERY_SLEEP)
 
-                # --- Hot-swap ---
+                # Not yet at a tick boundary — keep querying.
+                if queries_since_tick < self.queries_per_round:
+                    continue
+
+                # --- Tick boundary: advance counter, run gossip + exclusions ---
+                tick += 1
+                queries_since_tick = 0
+                state.current_round = tick
+                # Advance the bandit's local clock so TTL pruning has a
+                # fresh reference for every gossip tick.
+                community.bandit.tick_counter = tick
+
+                # Optional one-shot hot-swap at a specific tick.
                 if (
-                    self.hotswap_round > 0
-                    and round_num == self.hotswap_round
+                    not hotswap_done
+                    and self.hotswap_round > 0
+                    and tick == self.hotswap_round
                     and hotswap_model_name
                 ):
                     state.event(
                         f"HOT-SWAP: proposing {hotswap_model_name}", "round"
                     )
                     await community.propose_model(hotswap_model_name)
-                    await asyncio.sleep(0.5)
+                    hotswap_done = True
+                    await asyncio.sleep(0.2)
 
-                # --- Survival / exclusion ---
+                # --- Survival / exclusion check ---
                 state.phase = "survival"
-                excluded_this_round = community.check_exclusions(round_num)
-                for model_name in excluded_this_round:
+                excluded_this_tick = community.check_exclusions(tick)
+                for model_name in excluded_this_tick:
                     lcb, ucb = community.bandit.confidence_bounds(model_name)
                     reason = f"UCB={ucb:.3f} < best_LCB"
                     if self.gossip_enabled:
-                        await community.broadcast_exclusion(model_name, round_num, reason)
+                        await community.broadcast_exclusion(model_name, tick, reason)
                     state.event(f"ARM EXCLUDED: {model_name} ({reason})", "exclusion")
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.02)
 
-                # --- Record round snapshot (aggregated from this peer only) ---
+                # --- Record tick snapshot (schema unchanged: keyed on "round") ---
                 stats = community.bandit.get_stats()
                 arm_pulls = {n: s["pulls"] for n, s in stats.items()}
                 arm_mean_reward = {
@@ -433,47 +535,80 @@ class LTRCommunityThread(QThread):
                     set(state.round_history[-1]["arm_pulls"].keys())
                     if state.round_history else set()
                 )
-                round_snapshot = {
-                    "round": round_num,
+                tick_snapshot = {
+                    "round": tick,
                     "arm_pulls": arm_pulls,
                     "arm_mean_reward": arm_mean_reward,
                     "cumulative_reward": round(cumulative_reward, 4),
                     "oracle_cumulative": round(oracle_cumulative, 4),
                     "new_arms": [n for n in arm_pulls if n not in prev_arms],
                 }
-                state.round_history.append(round_snapshot)  # triggers snapshot via hook
+                state.round_history.append(tick_snapshot)
 
                 best = community.bandit.get_best_arm()
                 state.event(
-                    f"Round {round_num} done · best={best} · "
+                    f"Tick {tick} · best={best} · "
                     f"active={len(community.active_models)} · "
                     f"excluded={len(community.excluded_models)}",
                     "round",
                 )
 
-                # --- Gossip phase (end of round) ---
+                # --- TTL prune: evict originator entries from peers that
+                # have gone silent for STALE_ORIGINATOR_TTL consecutive ticks.
+                # Done before gossip so stale evidence doesn't re-propagate.
+                evicted = community.bandit.prune_stale_originators(
+                    STALE_ORIGINATOR_TTL
+                )
+                if evicted:
+                    by_origin: dict[str, int] = {}
+                    for _arm, origin in evicted:
+                        by_origin[origin] = by_origin.get(origin, 0) + 1
+                    summary = ", ".join(
+                        f"origin {o} ({n} arms)" for o, n in by_origin.items()
+                    )
+                    state.event(
+                        f"Pruned stale originator entries: {summary}",
+                        "info",
+                    )
+
+                # --- Gossip phase ---
                 if self.gossip_enabled:
                     state.phase = "gossiping"
                     for gr in range(1, GOSSIP_ROUNDS + 1):
+                        if self._stop_event.is_set():
+                            break
                         n = await community.send_gossip()
                         if n > 0:
                             state.event(
-                                f"Gossip round {gr}/{GOSSIP_ROUNDS}: sent to {n} peer(s)",
+                                f"Gossip {gr}/{GOSSIP_ROUNDS}: sent to {n} peer(s)",
                                 "gossip",
                             )
                         await asyncio.sleep(GOSSIP_DELAY)
-                else:
-                    state.event("Gossip skipped (disabled)", "info")
 
-            if not self._stop_event.is_set():
-                state.event("Experiment complete", "round")
-                self.finished_ok.emit()
+                # Reset per-tick counters on the community so its internal
+                # "round" bookkeeping tracks ticks rather than stale rounds.
+                community.reset_round_stats()
+                state.phase = "querying"
+
+                # Heartbeat our registry entry so a peer that starts mid-run
+                # can still discover us (and we don't get pruned as stale).
+                if time.time() - last_heartbeat >= _REGISTRY_HEARTBEAT_SECONDS:
+                    _walk_new_peers(_register_self(my_pid, "127.0.0.1", port))
+                    last_heartbeat = time.time()
+
+            state.event("Experiment stopped by user.", "round")
+            self.finished_ok.emit()
 
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
             state.phase = "finished"
             state._emit_snapshot()
+            try:
+                if state.community is not None and state.community.seeder is not None:
+                    state.community.seeder.shutdown()
+            except Exception:
+                pass
             try:
                 await ipv8.stop()
             except Exception:

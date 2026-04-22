@@ -12,6 +12,23 @@ import json
 from datetime import datetime, timezone
 
 
+def _derive_rng(seed: int | None, *tags) -> np.random.Generator:
+    """Build a per-site deterministic Generator from a master seed + tags.
+
+    When `seed` is None, returns a fresh non-deterministic Generator so the
+    non-seeded code path keeps its previous behaviour. When seeded, the tags
+    (e.g. peer_id, purpose) namespace the stream so distinct call sites don't
+    share draws — critical because a single master seed is reused across
+    every RNG in the experiment.
+    """
+    if seed is None:
+        return np.random.default_rng()
+
+    spawn_key = tuple(abs(hash(t)) % (2**32) for t in tags)
+    ss = np.random.SeedSequence(entropy=seed, spawn_key=spawn_key)
+    return np.random.default_rng(ss)
+
+
 class RankingModel(Protocol):
     def predict(self, X: np.ndarray) -> np.ndarray: ...
 
@@ -23,6 +40,10 @@ class OriginatorEntry:
     total_reward: float = 0.0  # UCB1: cumulative reward; Thompson: unused (α/β used instead)
     alpha: float = 1.0         # Thompson only: prior starts at 1
     beta: float = 1.0          # Thompson only: prior starts at 1
+    # Local-only freshness timestamp (owner's tick counter at the time this
+    # entry was last observed to make progress). Not serialized over gossip —
+    # each peer applies TTL pruning against its own local clock.
+    last_seen: int = 0
 
 
 # Flat stats shape returned by get_stats() — unchanged so callers don't break
@@ -41,10 +62,13 @@ class ArmStats:
 def _crdt_merge_tables(
     local: dict[str, OriginatorEntry],
     remote: dict[str, OriginatorEntry],
+    current_tick: int = 0,
 ) -> None:
     """G-Counter CRDT merge: for each originator take the entry with more pulls.
 
-    Modifies `local` in-place.
+    Modifies `local` in-place. Stamps `last_seen = current_tick` on any entry
+    whose evidence advances — used by TTL pruning to evict originators whose
+    peers have left the network.
     """
     for origin, remote_entry in remote.items():
         if origin not in local or remote_entry.pulls > local[origin].pulls:
@@ -53,6 +77,7 @@ def _crdt_merge_tables(
                 total_reward=remote_entry.total_reward,
                 alpha=remote_entry.alpha,
                 beta=remote_entry.beta,
+                last_seen=current_tick,
             )
 
 
@@ -109,14 +134,18 @@ def _discount_remote_table(
 class UCB1:
     """Upper Confidence Bound algorithm using per-originator CRDT tables."""
 
-    def __init__(self, arm_names: list[str], c: float = 2.0, peer_id: str = "local"):
+    def __init__(self, arm_names: list[str], c: float = 2.0, peer_id: str = "local", seed: int | None = None):
         self.c = c
         self.peer_id = peer_id
+        # Local gossip-tick counter used as the "clock" for TTL pruning.
+        self.tick_counter = 0
         # arm → {originator_id → OriginatorEntry}
         self.tables: dict[str, dict[str, OriginatorEntry]] = {
             name: {peer_id: OriginatorEntry()} for name in arm_names
         }
         self.total_pulls = 0
+        # Dedicated RNG for tiebreaking so ties don't depend on dict order.
+        self._rng = _derive_rng(seed, peer_id, "ucb1")
 
     # ------------------------------------------------------------------
     # Aggregation helpers
@@ -143,37 +172,47 @@ class UCB1:
         return result
 
     def select_arm(self, active: set[str] | None = None) -> str:
-        """Select arm using UCB1 with log(N+1)/(n+1) formula."""
-        candidates = active if active is not None else set(self.tables)
+        """Select arm using UCB1 with log(N+1)/(n+1) formula.
 
-        # Force-explore untested arms first
+        Iteration is over a sorted candidate list and ties are broken by the
+        bandit's dedicated RNG so two runs with the same seed make the same
+        choice regardless of set/dict insertion order.
+        """
+        candidates = sorted(active if active is not None else set(self.tables))
+
+        # Force-explore untested arms first (sorted order is deterministic).
         for name in candidates:
             _, n = self._aggregate(name)
             if n == 0:
                 return name
 
-        best_arm = None
         best_ucb = -float("inf")
+        best_arms: list[str] = []
         for name in candidates:
             R, n = self._aggregate(name)
             exploration = self.c * np.sqrt(np.log(self.total_pulls + 1) / (n + 1))
             ucb = R / n + exploration
             if ucb > best_ucb:
                 best_ucb = ucb
-                best_arm = name
+                best_arms = [name]
+            elif ucb == best_ucb:
+                best_arms.append(name)
 
-        return best_arm
+        if len(best_arms) == 1:
+            return best_arms[0]
+        return best_arms[int(self._rng.integers(len(best_arms)))]
 
     def update(self, arm_name: str, reward: float) -> None:
         """Update own originator entry for the selected arm."""
         entry = self.tables[arm_name][self.peer_id]
         entry.pulls += 1
         entry.total_reward += reward
+        entry.last_seen = self.tick_counter
         self.total_pulls += 1
 
     def crdt_merge(self, arm: str, remote_table: dict[str, OriginatorEntry]) -> None:
         """Merge a remote originator table into the local one for `arm`."""
-        _crdt_merge_tables(self.tables[arm], remote_table)
+        _crdt_merge_tables(self.tables[arm], remote_table, self.tick_counter)
         # Recompute total_pulls from scratch to stay consistent
         self.total_pulls = sum(
             sum(e.pulls for e in t.values()) for t in self.tables.values()
@@ -185,10 +224,37 @@ class UCB1:
             return
         self.tables[name] = {self.peer_id: OriginatorEntry()}
         if remote_table:
-            _crdt_merge_tables(self.tables[name], _discount_remote_table(remote_table))
+            _crdt_merge_tables(
+                self.tables[name],
+                _discount_remote_table(remote_table),
+                self.tick_counter,
+            )
             self.total_pulls = sum(
                 sum(e.pulls for e in t.values()) for t in self.tables.values()
             )
+
+    def prune_stale_originators(self, ttl_ticks: int) -> list[tuple[str, str]]:
+        """Drop originator entries not refreshed within `ttl_ticks` ticks.
+
+        The local peer's own entry is never pruned. Returns the list of
+        (arm, originator_id) pairs that were evicted so callers can log it.
+        """
+        if ttl_ticks <= 0:
+            return []
+        cutoff = self.tick_counter - ttl_ticks
+        evicted: list[tuple[str, str]] = []
+        for arm, table in self.tables.items():
+            for origin in list(table):
+                if origin == self.peer_id:
+                    continue
+                if table[origin].last_seen < cutoff:
+                    del table[origin]
+                    evicted.append((arm, origin))
+        if evicted:
+            self.total_pulls = sum(
+                sum(e.pulls for e in t.values()) for t in self.tables.values()
+            )
+        return evicted
 
     def get_best_arm(self) -> str:
         """Return arm with highest empirical mean reward."""
@@ -235,14 +301,18 @@ class UCB1:
 class ThompsonSampling:
     """Thompson Sampling using per-originator CRDT tables (continuous updates)."""
 
-    def __init__(self, arm_names: list[str], peer_id: str = "local"):
+    def __init__(self, arm_names: list[str], peer_id: str = "local", seed: int | None = None):
         self.peer_id = peer_id
+        # Local gossip-tick counter used as the "clock" for TTL pruning.
+        self.tick_counter = 0
         # arm → {originator_id → OriginatorEntry}
         self.tables: dict[str, dict[str, OriginatorEntry]] = {
             name: {peer_id: OriginatorEntry(alpha=1.0, beta=1.0, pulls=0)}
             for name in arm_names
         }
         self.total_pulls = 0
+        # Dedicated RNG for Beta posterior sampling.
+        self._rng = _derive_rng(seed, peer_id, "thompson")
 
     # ------------------------------------------------------------------
     # Aggregation helpers
@@ -273,21 +343,29 @@ class ThompsonSampling:
         return result
 
     def select_arm(self, active: set[str] | None = None) -> str:
-        """Select arm by sampling from aggregated Beta posterior."""
-        candidates = active if active is not None else set(self.tables)
+        """Select arm by sampling from aggregated Beta posterior.
 
-        # Force-explore untested arms first
+        Candidates are iterated in sorted order and Beta draws come from the
+        bandit's dedicated RNG so the same seed yields the same arm every run.
+        """
+        candidates = sorted(active if active is not None else set(self.tables))
+
+        # Force-explore untested arms first (sorted order is deterministic).
         for name in candidates:
             _, _, n = self._aggregate(name)
             if n == 0:
                 return name
 
-        samples = {}
+        best_name = candidates[0]
+        best_sample = -1.0
         for name in candidates:
             alpha, beta, _ = self._aggregate(name)
-            samples[name] = np.random.beta(alpha, beta)
+            sample = float(self._rng.beta(alpha, beta))
+            if sample > best_sample:
+                best_sample = sample
+                best_name = name
 
-        return max(samples, key=samples.get)
+        return best_name
 
     def update(self, arm_name: str, reward: float) -> None:
         """Continuous Bayesian update on own originator entry."""
@@ -295,11 +373,12 @@ class ThompsonSampling:
         entry.alpha += reward
         entry.beta += 1.0 - reward
         entry.pulls += 1
+        entry.last_seen = self.tick_counter
         self.total_pulls += 1
 
     def crdt_merge(self, arm: str, remote_table: dict[str, OriginatorEntry]) -> None:
         """Merge a remote originator table into the local one for `arm`."""
-        _crdt_merge_tables(self.tables[arm], remote_table)
+        _crdt_merge_tables(self.tables[arm], remote_table, self.tick_counter)
         self.total_pulls = sum(
             sum(e.pulls for e in t.values()) for t in self.tables.values()
         )
@@ -310,10 +389,37 @@ class ThompsonSampling:
             return
         self.tables[name] = {self.peer_id: OriginatorEntry(alpha=1.0, beta=1.0, pulls=0)}
         if remote_table:
-            _crdt_merge_tables(self.tables[name], _discount_remote_table(remote_table))
+            _crdt_merge_tables(
+                self.tables[name],
+                _discount_remote_table(remote_table),
+                self.tick_counter,
+            )
             self.total_pulls = sum(
                 sum(e.pulls for e in t.values()) for t in self.tables.values()
             )
+
+    def prune_stale_originators(self, ttl_ticks: int) -> list[tuple[str, str]]:
+        """Drop originator entries not refreshed within `ttl_ticks` ticks.
+
+        The local peer's own entry is never pruned. Returns the list of
+        (arm, originator_id) pairs that were evicted so callers can log it.
+        """
+        if ttl_ticks <= 0:
+            return []
+        cutoff = self.tick_counter - ttl_ticks
+        evicted: list[tuple[str, str]] = []
+        for arm, table in self.tables.items():
+            for origin in list(table):
+                if origin == self.peer_id:
+                    continue
+                if table[origin].last_seen < cutoff:
+                    del table[origin]
+                    evicted.append((arm, origin))
+        if evicted:
+            self.total_pulls = sum(
+                sum(e.pulls for e in t.values()) for t in self.tables.values()
+            )
+        return evicted
 
     def get_best_arm(self) -> str:
         """Return arm with highest posterior mean."""
