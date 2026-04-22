@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtGui import QFontDatabase
 
-import resources_rc  # noqa: F401 - registers compiled Qt resources
+from ui.resources import resources_rc  # noqa: F401 - registers compiled Qt resources
 
 
 INTER_FONT_FAMILY = "Inter"
