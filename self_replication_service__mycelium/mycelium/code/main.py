@@ -66,6 +66,13 @@ class Orchestrator:
 
     def _handle_shutdown(self, signum: int, frame) -> None:
         """Handle shutdown signals."""
+        ps = state_module.get()
+        if ps and ps.is_spawn_in_progress():
+            logger.warning(
+                "Received signal %d but spawn in progress — ignoring to let spawn finish",
+                signum,
+            )
+            return
         logger.info("Received signal %d, initiating shutdown", signum)
         self.running = False
         for task in self._tasks:
@@ -77,15 +84,21 @@ class Orchestrator:
             try:
                 if self.code_sync.has_updates():
                     logger.info("Updates detected on remote repository")
-                    old_version = _get_version()
-                    self.code_sync.pull_updates()
-                    new_version = _get_version()
-                    event_logger.get().log_event("restart", {
-                        "old_version": old_version,
-                        "new_version": new_version,
-                    })
-                    logger.info("Updates pulled successfully, restarting")
-                    os._exit(Config.EXIT_RESTART)
+                    ps = state_module.get()
+                    if ps and ps.is_spawn_in_progress():
+                        logger.warning(
+                            "Spawn in progress — deferring restart until spawn completes"
+                        )
+                    else:
+                        old_version = _get_version()
+                        self.code_sync.pull_updates()
+                        new_version = _get_version()
+                        event_logger.get().log_event("restart", {
+                            "old_version": old_version,
+                            "new_version": new_version,
+                        })
+                        logger.info("Updates pulled successfully, restarting")
+                        os._exit(Config.EXIT_RESTART)
             except CodeSyncError as e:
                 logger.error("Code sync error: %s", e)
 
