@@ -10,28 +10,11 @@ from config import Config
 from utils import setup_logger
 from ..monitoring import sporestack_client
 from ..monitoring.node_monitor import NodeState
-from ..core.wallet import get_wallet
+from ..core.wallet import get_wallet, parse_bitcoin_uri
 
 logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
 _SS_MIN_INVOICE_DOLLARS = 5
-
-
-def _parse_bitcoin_uri(uri: str):
-    """Parse bitcoin:ADDRESS?amount=BTC → (address, amount_sat) or None."""
-    if not uri.startswith("bitcoin:"):
-        return None
-    parts = uri[8:].split("?")
-    address = parts[0]
-    amount_btc = None
-    if len(parts) > 1:
-        for param in parts[1].split("&"):
-            if param.startswith("amount="):
-                amount_btc = float(param[7:])
-                break
-    if not address or amount_btc is None:
-        return None
-    return address, int(amount_btc * 100_000_000)
 
 
 async def topup_sporestack(node_state: NodeState) -> None:
@@ -75,7 +58,7 @@ async def topup_sporestack(node_state: NodeState) -> None:
 
     invoice = response.get("invoice", response)
     payment_uri = invoice.get("payment_uri", "")
-    parsed = _parse_bitcoin_uri(payment_uri)
+    parsed = parse_bitcoin_uri(payment_uri)
     if not parsed:
         logger.error("Cannot parse payment URI: %r", response)
         return

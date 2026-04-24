@@ -78,10 +78,16 @@ class Config:
     INHERITANCE_RATIO: float   = float(os.getenv("MYCELIUM_INHERITANCE_RATIO", "0.4"))
 
     # Decision loop
-    DECISION_INTERVAL: int     = int(os.getenv("MYCELIUM_DECISION_INTERVAL", "43200"))      # 12h
+    DECISION_INTERVAL: int     = int(os.getenv("MYCELIUM_DECISION_INTERVAL", "60"))
+    # DECISION_INTERVAL: int     = int(os.getenv("MYCELIUM_DECISION_INTERVAL", "43200"))# 12h
     FAILSAFE_TRIGGER_DAYS: int = int(os.getenv("MYCELIUM_FAILSAFE_TRIGGER_DAYS", "2"))
     TOPUP_TRIGGER_DAYS: int    = int(os.getenv("MYCELIUM_TOPUP_TRIGGER_DAYS", "30"))
     TOPUP_TARGET_DAYS: int     = int(os.getenv("MYCELIUM_TOPUP_TARGET_DAYS", "30"))
+
+    # Max seconds the shutdown handler will defer a signal while a spawn is in progress.
+    # After this, SIGTERM/SIGINT is honoured so the operator can kill a wedged spawn
+    # without SIGKILL (which would leave spawn_in_progress=True and re-trigger recovery).
+    MAX_SPAWN_DURATION: int = int(os.getenv("MYCELIUM_MAX_SPAWN_DURATION", str(2 * 3600)))  # 2h
 
     # SporeStack / VPS identity
     SPORESTACK_TOKEN_FILE: Path = DATA_DIR / "sporestack_token"

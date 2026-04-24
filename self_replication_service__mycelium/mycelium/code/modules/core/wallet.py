@@ -9,7 +9,7 @@ persists mnemonic to disk (chmod 600), and removes the env var from
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from bitcoinlib.wallets import Wallet
 
@@ -26,6 +26,23 @@ logger = setup_logger(
 class WalletError(Exception):
     """Base exception for wallet operations."""
     pass
+
+
+def parse_bitcoin_uri(uri: str) -> Optional[Tuple[str, int]]:
+    """Parse BIP-21 bitcoin:ADDRESS?amount=BTC → (address, amount_sat) or None."""
+    if not uri.startswith("bitcoin:"):
+        return None
+    parts = uri[8:].split("?")
+    address = parts[0]
+    amount_btc = None
+    if len(parts) > 1:
+        for param in parts[1].split("&"):
+            if param.startswith("amount="):
+                amount_btc = float(param[7:])
+                break
+    if not address or amount_btc is None:
+        return None
+    return address, int(amount_btc * 100_000_000)
 
 
 def _remove_from_etc_environment(key: str) -> None:

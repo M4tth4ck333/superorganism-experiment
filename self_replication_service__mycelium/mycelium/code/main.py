@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -68,11 +69,33 @@ class Orchestrator:
         """Handle shutdown signals."""
         ps = state_module.get()
         if ps and ps.is_spawn_in_progress():
-            logger.warning(
-                "Received signal %d but spawn in progress — ignoring to let spawn finish",
-                signum,
+            spawn_age = time.time() - ps.get_spawn_started_at()
+            if spawn_age < Config.MAX_SPAWN_DURATION:
+                logger.warning(
+                    "Received signal %d but spawn in progress (%.0fs elapsed < %ds limit) — deferring",
+                    signum, spawn_age, Config.MAX_SPAWN_DURATION,
+                )
+                return
+            # Spawn has exceeded the bound — assume wedged. Log what is about to be abandoned
+            # so the operator can manually reclaim the SporeStack token / VPS / child BTC address,
+            # then clear KV state to prevent a recovery loop on next boot.
+            spawn_id = ps.get_spawn_id()
+            stored_identity = ps.get("spawn_identity") or {}
+            stored_vps = ps.get("spawn_vps_info") or {}
+            logger.error(
+                "Received signal %d and spawn has been running %.0fs (≥ %ds limit) — abandoning. "
+                "ORPHANED: spawn_id=%s sporestack_token=%s machine_id=%s host=%s child_btc_address=%s "
+                "spawn_dir=%s (preserved for manual reclaim). "
+                "Clearing spawn_in_progress + identity/vps blobs to avoid recovery loop.",
+                signum, spawn_age, Config.MAX_SPAWN_DURATION,
+                spawn_id,
+                stored_identity.get("sporestack_token", "?"),
+                stored_vps.get("machine_id", "?"),
+                stored_vps.get("host", "?"),
+                stored_identity.get("btc_address", "?"),
+                Config.DATA_DIR / "spawn" / spawn_id if spawn_id else "?",
             )
-            return
+            ps.mark_spawn_completed(success=False)
         logger.info("Received signal %d, initiating shutdown", signum)
         self.running = False
         for task in self._tasks:

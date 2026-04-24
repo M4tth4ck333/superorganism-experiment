@@ -10,10 +10,11 @@ from bitcoinlib.wallets import Wallet, wallet_delete
 
 from config import Config
 from utils import setup_logger
+from ..core.wallet import get_wallet, parse_bitcoin_uri
 from ..monitoring import sporestack_client
 from ..monitoring.node_monitor import NodeState
+from .errors import SpawnError
 from .ssh_deployer import generate_ssh_keypair
-from ..core.wallet import get_wallet
 
 logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
@@ -22,14 +23,9 @@ _POLL_INTERVAL = 30
 _POLL_TIMEOUT = 1800
 
 
-class SpawnIdentityError(Exception):
-    """Any failure during child identity preparation."""
-    pass
-
-
 @dataclass
 class ChildIdentity:
-    child_token: str            # local spawn ID (passed in)
+    spawn_id: str               # local spawn ID (passed in)
     sporestack_token: str       # fresh SporeStack API token
     ssh_private_key_path: str   # absolute path to id_ed25519
     ssh_public_key: str         # full content of id_ed25519.pub
@@ -38,30 +34,13 @@ class ChildIdentity:
     funded_cents: int           # SporeStack balance observed after funding lands
 
 
-def _parse_bitcoin_uri(uri: str):
-    """Parse bitcoin:ADDRESS?amount=BTC → (address, amount_sat) or None."""
-    if not uri.startswith("bitcoin:"):
-        return None
-    parts = uri[8:].split("?")
-    address = parts[0]
-    amount_btc = None
-    if len(parts) > 1:
-        for param in parts[1].split("&"):
-            if param.startswith("amount="):
-                amount_btc = float(param[7:])
-                break
-    if not address or amount_btc is None:
-        return None
-    return address, int(amount_btc * 100_000_000)
-
-
-def _generate_child_btc_wallet(child_token: str):
+def _generate_child_btc_wallet(spawn_id: str):
     """Create throwaway bitcoinlib wallet in isolated DB; return (mnemonic, address). DB deleted in finally."""
-    spawn_dir = Config.DATA_DIR / "spawn" / child_token
+    spawn_dir = Config.DATA_DIR / "spawn" / spawn_id
     spawn_dir.mkdir(parents=True, exist_ok=True)
     temp_db_path = spawn_dir / "child-wallet.db"
     db_uri = f"sqlite:///{temp_db_path}"
-    wallet_name = f"child-{child_token}"
+    wallet_name = f"child-{spawn_id}"
 
     mnemonic = Mnemonic().generate()
     try:
@@ -102,41 +81,42 @@ async def _wait_for_credit(sporestack_token: str) -> int:
         elapsed = int(time.time() - start)
         logger.info("Waiting for credit... (%ds elapsed)", elapsed)
         await asyncio.sleep(_POLL_INTERVAL)
-    raise SpawnIdentityError(
-        f"Timeout ({_POLL_TIMEOUT}s) waiting for SporeStack credit to land"
+    raise SpawnError(
+        "identity",
+        f"Timeout ({_POLL_TIMEOUT}s) waiting for SporeStack credit to land",
     )
 
 
 async def prepare_child_identity(
-    child_token: str,
+    spawn_id: str,
     node_state: NodeState,
 ) -> ChildIdentity:
     """Produce SSH keypair, BTC wallet, SporeStack token, and fund it from the parent's wallet."""
-    logger.info("Preparing identity for %s", child_token)
+    logger.info("Preparing identity for %s", spawn_id)
 
     # 1) SSH keypair
-    key_path = Config.DATA_DIR / "spawn" / child_token / "ssh" / "id_ed25519"
+    key_path = Config.DATA_DIR / "spawn" / spawn_id / "ssh" / "id_ed25519"
     try:
         priv_key_path, pub_key = generate_ssh_keypair(
             str(key_path),
             key_type="ed25519",
-            comment=f"mycelium-{child_token}",
+            comment=f"mycelium-{spawn_id}",
         )
     except Exception as e:
-        raise SpawnIdentityError(f"SSH keypair generation failed: {e}") from e
+        raise SpawnError("identity", f"SSH keypair generation failed: {e}") from e
     logger.info("SSH keypair ready at %s", priv_key_path)
 
     # 2) BTC wallet (temp, isolated — mnemonic + address are the only survivors)
     try:
-        btc_mnemonic, btc_address = _generate_child_btc_wallet(child_token)
+        btc_mnemonic, btc_address = _generate_child_btc_wallet(spawn_id)
     except Exception as e:
-        raise SpawnIdentityError(f"Child BTC wallet generation failed: {e}") from e
+        raise SpawnError("identity", f"Child BTC wallet generation failed: {e}") from e
     logger.info("Child BTC address: %s", btc_address)
 
     # 3) SporeStack token
     sporestack_token = await asyncio.to_thread(sporestack_client.generate_token)
     if not sporestack_token:
-        raise SpawnIdentityError("generate_token returned None")
+        raise SpawnError("identity", "generate_token returned None")
     logger.info("Minted SporeStack token")
 
     # 4) Size the funding (~30 days at the current flavor/provider cost)
@@ -155,12 +135,12 @@ async def prepare_child_identity(
         sporestack_client.create_invoice, sporestack_token, needed_dollars
     )
     if not response:
-        raise SpawnIdentityError("create_invoice returned None")
+        raise SpawnError("identity", "create_invoice returned None")
     invoice = response.get("invoice", response)
     payment_uri = invoice.get("payment_uri", "")
-    parsed = _parse_bitcoin_uri(payment_uri)
+    parsed = parse_bitcoin_uri(payment_uri)
     if not parsed:
-        raise SpawnIdentityError(f"Cannot parse payment URI: {response!r}")
+        raise SpawnError("identity", f"Cannot parse payment URI: {response!r}")
     pay_address, amount_sat = parsed
     logger.info(
         "Invoice: send %d sat to %s (for $%d)",
@@ -170,23 +150,24 @@ async def prepare_child_identity(
     # 6) Send BTC from parent wallet
     wallet = get_wallet()
     if wallet is None:
-        raise SpawnIdentityError("Parent wallet not initialized")
+        raise SpawnError("identity", "Parent wallet not initialized")
     wallet_sat = await asyncio.to_thread(wallet.get_balance_satoshis)
     if wallet_sat < amount_sat:
-        raise SpawnIdentityError(
-            f"Insufficient parent BTC: have {wallet_sat} sat, need {amount_sat} sat"
+        raise SpawnError(
+            "identity",
+            f"Insufficient parent BTC: have {wallet_sat} sat, need {amount_sat} sat",
         )
     try:
         txid = await asyncio.to_thread(wallet.send, pay_address, amount_sat)
     except Exception as e:
-        raise SpawnIdentityError(f"Invoice payment failed: {e}") from e
+        raise SpawnError("identity", f"Invoice payment failed: {e}") from e
     logger.info("Paid invoice — txid %s", txid)
 
     # 7) Poll for credit landing
     funded_cents = await _wait_for_credit(sporestack_token)
 
     return ChildIdentity(
-        child_token=child_token,
+        spawn_id=spawn_id,
         sporestack_token=sporestack_token,
         ssh_private_key_path=priv_key_path,
         ssh_public_key=pub_key,

@@ -10,6 +10,7 @@ import asyncio
 from config import Config
 from utils import setup_logger
 from ..orchestration.spawn_thresholds import mutate_caution_trait
+from .errors import SpawnError
 from .spawn_identity import ChildIdentity
 from .spawn_provision import ChildVpsInfo
 from .ssh_deployer import SSHDeployer
@@ -19,19 +20,14 @@ logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", le
 _POST_START_SETTLE_SECONDS = 15
 
 
-class SpawnDeployError(Exception):
-    """Any failure during child code deployment or orchestrator boot."""
-    pass
-
-
 async def deploy_child_code(
     identity: ChildIdentity,
     vps_info: ChildVpsInfo,
 ) -> SSHDeployer:
     """SSH into child VPS, install deps, deploy code and content. Returns connected deployer (caller owns disconnect)."""
     logger.info(
-        "Deploying code to child VPS: child_token=%s host=%s:%d",
-        identity.child_token, vps_info.host, vps_info.ssh_port,
+        "Deploying code to child VPS: spawn_id=%s host=%s:%d",
+        identity.spawn_id, vps_info.host, vps_info.ssh_port,
     )
 
     deployer = SSHDeployer(ssh_key_path=vps_info.ssh_key_path)
@@ -50,14 +46,15 @@ async def deploy_child_code(
             deployer.deploy_cookies, str(Config.COOKIES_FILE)
         )
     except Exception as e:
-        deployer.disconnect()
-        raise SpawnDeployError(
-            f"Child code deployment failed for {identity.child_token}: {e}"
+        await asyncio.to_thread(deployer.disconnect)
+        raise SpawnError(
+            "deploy",
+            f"Child code deployment failed for {identity.spawn_id}: {e}",
         ) from e
 
     logger.info(
-        "Child code deployed: child_token=%s host=%s",
-        identity.child_token, vps_info.host,
+        "Child code deployed: spawn_id=%s host=%s",
+        identity.spawn_id, vps_info.host,
     )
     return deployer
 
@@ -95,16 +92,20 @@ async def boot_child_orchestrator(
         await asyncio.sleep(_POST_START_SETTLE_SECONDS)
         healthy = await asyncio.to_thread(deployer.check_health)
         if not healthy:
-            raise SpawnDeployError(
-                f"Child orchestrator crashed within {_POST_START_SETTLE_SECONDS}s of boot"
+            raise SpawnError(
+                "boot",
+                f"Child orchestrator crashed within {_POST_START_SETTLE_SECONDS}s of boot",
             )
+    except SpawnError:
+        raise
     except Exception as e:
-        raise SpawnDeployError(
-            f"Child orchestrator boot failed for {identity.child_token}: {e}"
+        raise SpawnError(
+            "boot",
+            f"Child orchestrator boot failed for {identity.spawn_id}: {e}",
         ) from e
 
     logger.info(
-        "Child orchestrator running: child_token=%s caution=%.3f host=%s",
-        identity.child_token, child_caution, deployer.host,
+        "Child orchestrator running: spawn_id=%s caution=%.3f host=%s",
+        identity.spawn_id, child_caution, deployer.host,
     )
     return child_caution

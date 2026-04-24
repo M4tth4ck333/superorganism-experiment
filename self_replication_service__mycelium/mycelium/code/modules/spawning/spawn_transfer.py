@@ -8,14 +8,10 @@ from ..core import state as state_module
 from ..core import wallet as wallet_module
 from ..monitoring.node_monitor import NodeState
 from ..orchestration.spawn_thresholds import compute_child_share
+from .errors import SpawnError
 from .spawn_identity import ChildIdentity
 
 logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
-
-
-class SpawnTransferError(Exception):
-    """Any failure during inheritance BTC transfer."""
-    pass
 
 
 async def transfer_inheritance(
@@ -26,14 +22,18 @@ async def transfer_inheritance(
     ps = state_module.get()
     wallet = wallet_module.get_wallet()
     if ps is None:
-        raise SpawnTransferError("NodePersistentState not initialised")
+        raise SpawnError("transfer", "NodePersistentState not initialised")
     if wallet is None:
-        raise SpawnTransferError("SpendingWallet not initialised")
+        raise SpawnError("transfer", "SpendingWallet not initialised")
 
-    child_share_sat = compute_child_share(node_state.btc_balance_sat)
+    # Re-read balance immediately before sizing the share — NodeMonitor's snapshot in node_state
+    # is stale by up to MONITOR_INTERVAL AND spawn_identity already spent ~TOPUP_TARGET_DAYS of
+    # runway funding SporeStack. On recovery the snapshot is even more stale.
+    parent_balance_sat = await asyncio.to_thread(wallet.get_balance_satoshis)
+    child_share_sat = compute_child_share(parent_balance_sat)
     logger.info(
-        "Transferring inheritance: child_token=%s amount=%d sat to=%s",
-        identity.child_token, child_share_sat, identity.btc_address,
+        "Transferring inheritance: spawn_id=%s parent_balance=%d sat amount=%d sat to=%s",
+        identity.spawn_id, parent_balance_sat, child_share_sat, identity.btc_address,
     )
 
     try:
@@ -41,13 +41,14 @@ async def transfer_inheritance(
             wallet.send, identity.btc_address, child_share_sat
         )
     except Exception as e:
-        raise SpawnTransferError(
-            f"Inheritance transfer failed for {identity.child_token}: {e}"
+        raise SpawnError(
+            "transfer",
+            f"Inheritance transfer failed for {identity.spawn_id}: {e}",
         ) from e
 
     ps.mark_spawn_completed(success=True, child_btc_address=identity.btc_address)
     logger.info(
-        "Spawn complete: child_token=%s txid=%s amount=%d sat",
-        identity.child_token, txid, child_share_sat,
+        "Spawn complete: spawn_id=%s txid=%s amount=%d sat",
+        identity.spawn_id, txid, child_share_sat,
     )
     return txid

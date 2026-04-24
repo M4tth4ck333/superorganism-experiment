@@ -5,6 +5,7 @@ Survives os._exit(42) restarts thanks to WAL mode with immediate commits.
 """
 
 import json
+import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -60,25 +61,39 @@ class NodePersistentState:
     def is_spawn_in_progress(self) -> bool:
         return bool(self.get("spawn_in_progress", False))
 
-    def mark_spawn_started(self, child_token: str) -> None:
+    def get_spawn_id(self) -> str:
+        return str(self.get("spawn_id", ""))
+
+    def get_spawn_started_at(self) -> float:
+        return float(self.get("spawn_started_at", 0) or 0)
+
+    def mark_spawn_started(self, spawn_id: str) -> None:
         self.set("spawn_in_progress", True)
-        self.set("spawn_child_token", child_token)
+        self.set("spawn_id", spawn_id)
         self.set("spawn_started_at", time.time())
 
     def mark_spawn_completed(self, success: bool, child_btc_address: str = "") -> None:
+        spawn_id = self.get_spawn_id()
         self.set("spawn_in_progress", False)
         if success:
             history = self.get("spawn_history", [])
             history.append({
-                "child_token": self.get("spawn_child_token", ""),
+                "spawn_id": spawn_id,
                 "child_btc_address": child_btc_address,
                 "started_at": self.get("spawn_started_at", 0),
                 "completed_at": time.time(),
                 "success": True,
             })
             self.set("spawn_history", history)
-        self.delete("spawn_child_token")
+            if spawn_id:
+                shutil.rmtree(
+                    Config.DATA_DIR / "spawn" / spawn_id,
+                    ignore_errors=True,
+                )
+        self.delete("spawn_id")
         self.delete("spawn_started_at")
+        self.delete("spawn_identity")
+        self.delete("spawn_vps_info")
 
     # ── failsafe guard ──────────────────────────────────────────
 

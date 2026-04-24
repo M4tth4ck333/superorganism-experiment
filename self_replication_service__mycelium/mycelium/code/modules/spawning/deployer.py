@@ -1,57 +1,131 @@
+"""Orchestrates the full child-spawn pipeline with durable identity + VPS reuse on retry."""
+
+import asyncio
+from dataclasses import asdict
+
 from config import Config
 from utils import setup_logger
 from ..core import state as state_module
 from ..monitoring.node_monitor import NodeState
-from .spawn_identity import prepare_child_identity, SpawnIdentityError
-from .spawn_provision import provision_child_vps, SpawnProvisionError
-from .spawn_deploy import deploy_child_code, boot_child_orchestrator, SpawnDeployError
-from .spawn_transfer import transfer_inheritance, SpawnTransferError
+from .errors import SpawnError
+from .spawn_deploy import boot_child_orchestrator, deploy_child_code
+from .spawn_identity import ChildIdentity, prepare_child_identity
+from .spawn_provision import ChildVpsInfo, provision_child_vps
+from .spawn_transfer import transfer_inheritance
 
 logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
+_DISCONNECT_TIMEOUT_SECONDS = 15
 
-async def spawn_child(node_state: NodeState, caution_trait: float, child_token: str) -> None:
-    """Orchestrate the full spawn pipeline. On failure, leave spawn_in_progress=True for retry."""
-    ps = state_module.get()
-    ssh_deployer = None
-    logger.info("=== Spawn pipeline start: child_token=%s ===", child_token)
+
+def _load_stored_identity(ps, spawn_id: str):
+    """If a matching identity blob was persisted by a prior attempt, rehydrate it."""
+    blob = ps.get("spawn_identity")
+    if not blob or blob.get("spawn_id") != spawn_id:
+        return None
     try:
-        logger.info("[1/5] Preparing child identity: child_token=%s", child_token)
-        identity = await prepare_child_identity(child_token, node_state)
+        return ChildIdentity(**blob)
+    except TypeError as e:
+        logger.warning("Stored identity blob has unexpected shape (%s) — discarding", e)
+        ps.delete("spawn_identity")
+        return None
 
-        logger.info("[2/5] Provisioning child VPS: child_token=%s", child_token)
-        vps_info = await provision_child_vps(identity)
 
+def _load_stored_vps(ps, spawn_id: str):
+    """If a matching VPS-info blob was persisted by a prior attempt, rehydrate it."""
+    blob = ps.get("spawn_vps_info")
+    if not blob or blob.get("spawn_id") != spawn_id:
+        return None
+    try:
+        return ChildVpsInfo(**blob)
+    except TypeError as e:
+        logger.warning("Stored VPS-info blob has unexpected shape (%s) — discarding", e)
+        ps.delete("spawn_vps_info")
+        return None
+
+
+async def _safe_disconnect(ssh_deployer) -> None:
+    """Disconnect SSH off the event loop with a bounded timeout."""
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(ssh_deployer.disconnect),
+            timeout=_DISCONNECT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("SSH disconnect timed out after %ds — abandoning socket", _DISCONNECT_TIMEOUT_SECONDS)
+    except Exception as e:
+        logger.warning("SSH disconnect raised: %s", e)
+
+
+async def spawn_child(node_state: NodeState, caution_trait: float, spawn_id: str) -> None:
+    """Run the full spawn pipeline. On failure, leave spawn_in_progress=True for retry.
+
+    Each durable side-effect (identity minting, VPS provisioning) persists its result to state.db
+    so a restart mid-pipeline can re-enter at the last successful step without re-spending money
+    on fresh SporeStack tokens or orphaning already-provisioned VPSes.
+    """
+    ps = state_module.get()
+    if ps is None:
+        logger.error("Persistent state unavailable — aborting spawn")
+        return
+
+    ssh_deployer = None
+    logger.info("=== Spawn pipeline start: spawn_id=%s ===", spawn_id)
+    try:
+        # Step 1: identity (reuse if already minted & funded)
+        identity = _load_stored_identity(ps, spawn_id)
+        if identity is not None:
+            logger.info(
+                "[1/5] Reusing persisted child identity: spawn_id=%s (sporestack_token funded=%d cents)",
+                spawn_id, identity.funded_cents,
+            )
+        else:
+            logger.info("[1/5] Preparing child identity: spawn_id=%s", spawn_id)
+            identity = await prepare_child_identity(spawn_id, node_state)
+            ps.set("spawn_identity", asdict(identity))
+
+        # Step 2: VPS (reuse if already provisioned)
+        vps_info = _load_stored_vps(ps, spawn_id)
+        if vps_info is not None:
+            logger.info(
+                "[2/5] Reusing persisted child VPS: spawn_id=%s machine_id=%s host=%s:%d",
+                spawn_id, vps_info.machine_id, vps_info.host, vps_info.ssh_port,
+            )
+        else:
+            logger.info("[2/5] Provisioning child VPS: spawn_id=%s", spawn_id)
+            vps_info = await provision_child_vps(identity)
+
+        # Step 3: deploy code (always re-runs — idempotent thanks to git pull / mkdir -p etc.)
         logger.info(
-            "[3/5] Deploying child code: child_token=%s host=%s",
-            child_token, vps_info.host,
+            "[3/5] Deploying child code: spawn_id=%s host=%s",
+            spawn_id, vps_info.host,
         )
         ssh_deployer = await deploy_child_code(identity, vps_info)
 
-        logger.info("[4/5] Booting child orchestrator: child_token=%s", child_token)
+        # Step 4: boot orchestrator
+        logger.info("[4/5] Booting child orchestrator: spawn_id=%s", spawn_id)
         child_caution = await boot_child_orchestrator(ssh_deployer, identity, caution_trait)
 
-        logger.info("[5/5] Transferring inheritance BTC: child_token=%s", child_token)
+        # Step 5: transfer inheritance (mark_spawn_completed inside clears state keys + rmtree)
+        logger.info("[5/5] Transferring inheritance BTC: spawn_id=%s", spawn_id)
         txid = await transfer_inheritance(identity, node_state)
 
-        ps.delete("spawn_vps_info")
-
         logger.info(
-            "=== Spawn complete: child_token=%s child_btc=%s txid=%s caution=%.3f ===",
-            child_token, identity.btc_address, txid, child_caution,
+            "=== Spawn complete: spawn_id=%s child_btc=%s txid=%s caution=%.3f ===",
+            spawn_id, identity.btc_address, txid, child_caution,
         )
-    except (SpawnIdentityError, SpawnProvisionError, SpawnDeployError, SpawnTransferError) as e:
+    except SpawnError as e:
         logger.error(
-            "Spawn pipeline failed: child_token=%s — %s. "
+            "Spawn pipeline failed at step=%s: spawn_id=%s — %s. "
             "spawn_in_progress=True preserved; will retry on next restart.",
-            child_token, e,
+            e.step, spawn_id, e,
         )
     except Exception:
         logger.exception(
-            "Unexpected error in spawn pipeline: child_token=%s. "
+            "Unexpected error in spawn pipeline: spawn_id=%s. "
             "spawn_in_progress=True preserved; will retry on next restart.",
-            child_token,
+            spawn_id,
         )
     finally:
         if ssh_deployer is not None:
-            ssh_deployer.disconnect()
+            await _safe_disconnect(ssh_deployer)
