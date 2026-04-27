@@ -8,6 +8,7 @@ the inheritance twice from different UTXOs.
 """
 
 import asyncio
+import time
 from typing import Optional
 
 from config import Config
@@ -22,17 +23,21 @@ from .spawn_identity import ChildIdentity
 
 logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
+# How long to keep re-querying the indexer before we accept "no prior tx exists"
+# on the resume path. Mempool propagation on signet/testnet can lag well beyond
+# the bitcoinlib transactions_update default; without this poll a freshly
+# broadcast inheritance tx that hasn't reached the indexer yet would be
+# re-broadcast, double-paying the inheritance.
+_RECONCILE_POLL_TIMEOUT_SECONDS = 90
+_RECONCILE_POLL_INTERVAL_SECONDS = 10
 
-def _find_prior_send(
+
+def _scan_for_prior_send(
     wallet: SpendingWallet,
     child_btc_address: str,
     amount_sat: int,
 ) -> Optional[str]:
-    """Scan bitcoinlib's stored transactions for an outbound tx paying amount_sat to child_btc_address.
-
-    If found, return its txid. We rescan the wallet first so that a tx broadcast
-    by a prior process but not yet observed by this process is pulled in.
-    """
+    """One pass over bitcoinlib's stored transactions; returns matching outbound txid or None."""
     try:
         wallet._wallet.transactions_update()
     except Exception as e:
@@ -45,9 +50,8 @@ def _find_prior_send(
         return None
 
     for tx in txs or []:
-        # Filter to outbound only — bitcoinlib marks these via `is_send` or
-        # negative tx.value; checking outputs matching (addr, amount) is the
-        # robust test because a self-send can still have a matching output.
+        if not getattr(tx, "is_send", True):
+            continue
         outputs = getattr(tx, "outputs", None) or []
         for out in outputs:
             out_addr = getattr(out, "address", None)
@@ -57,6 +61,28 @@ def _find_prior_send(
                 if txid:
                     return txid
     return None
+
+
+def _find_prior_send(
+    wallet: SpendingWallet,
+    child_btc_address: str,
+    amount_sat: int,
+) -> Optional[str]:
+    """Poll bitcoinlib's indexer for up to _RECONCILE_POLL_TIMEOUT_SECONDS for a matching outbound tx.
+
+    A just-broadcast tx may not be visible to the indexer for seconds-to-minutes;
+    a single scan that misses it would cause a double-broadcast. None means we
+    polled to timeout and still saw nothing — caller must treat as "unknown"
+    (do NOT re-broadcast blindly).
+    """
+    start = time.time()
+    while True:
+        txid = _scan_for_prior_send(wallet, child_btc_address, amount_sat)
+        if txid:
+            return txid
+        if time.time() - start >= _RECONCILE_POLL_TIMEOUT_SECONDS:
+            return None
+        time.sleep(_RECONCILE_POLL_INTERVAL_SECONDS)
 
 
 async def transfer_inheritance(
@@ -87,8 +113,8 @@ async def transfer_inheritance(
         child_share_sat = int(intent["amount_sat"])
         logger.info(
             "Resume: spawn_transfer_intent found — reconciling against wallet history "
-            "(amount=%d sat to=%s)",
-            child_share_sat, child_btc_address,
+            "(amount=%d sat to=%s, polling up to %ds)",
+            child_share_sat, child_btc_address, _RECONCILE_POLL_TIMEOUT_SECONDS,
         )
         prior_txid = await asyncio.to_thread(
             _find_prior_send, wallet, child_btc_address, child_share_sat,
@@ -101,7 +127,22 @@ async def transfer_inheritance(
             ps.set("spawn_transfer_txid", prior_txid)
             ps.mark_spawn_completed(success=True, child_btc_address=identity.btc_address)
             return prior_txid
-        logger.info("Resume: no matching tx in history — retrying wallet.send")
+        # We have a transfer intent but couldn't find a matching tx in the
+        # parent's wallet history within the poll window. Re-broadcasting blindly
+        # could double-pay if a prior broadcast is sitting unobserved in mempool.
+        # Stop here, leave spawn_in_progress=True, and let the operator reconcile.
+        logger.critical(
+            "Resume: spawn_transfer_intent exists for spawn_id=%s but no matching outbound tx "
+            "found after %ds of polling. Refusing to re-broadcast — a prior tx may be unconfirmed "
+            "in mempool. Leaving spawn_in_progress=True for human reconciliation. "
+            "Intent: amount=%d sat to=%s",
+            identity.spawn_id, _RECONCILE_POLL_TIMEOUT_SECONDS, child_share_sat, child_btc_address,
+        )
+        raise SpawnError(
+            "transfer",
+            f"Inheritance reconcile inconclusive after {_RECONCILE_POLL_TIMEOUT_SECONDS}s; "
+            "manual review required",
+        )
     else:
         # Re-read parent balance immediately before sizing: NodeMonitor's snapshot
         # can be up to MONITOR_INTERVAL stale, and spawn_identity has already

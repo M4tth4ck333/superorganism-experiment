@@ -84,7 +84,11 @@ class NodeMonitor:
                     # ONLY way to infer/get that information is to wait for /server/quote to support
                     # the VPS provider used here and then to divide the quote's cost by 30.
 
-                servers = sporestack_client.get_servers(token)
+                try:
+                    servers = sporestack_client.get_servers(token)
+                except sporestack_client.SporeStackError as e:
+                    logger.warning("get_servers failed (monitor refresh): %s", e)
+                    servers = []
                 if servers:
                     server = servers[-1]
                 if server:

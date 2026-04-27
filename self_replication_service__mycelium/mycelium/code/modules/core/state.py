@@ -84,6 +84,7 @@ class NodePersistentState:
         "spawn_sporestack_token",
         "spawn_funding_intent",
         "spawn_funding_txid",
+        "spawn_funding_attempts",
         "spawn_vps_intent",
         "spawn_transfer_intent",
         "spawn_transfer_txid",
@@ -128,10 +129,17 @@ class NodePersistentState:
             raise
 
         if success and spawn_id:
-            shutil.rmtree(
-                Config.DATA_DIR / "spawn" / spawn_id,
-                ignore_errors=True,
-            )
+            spawn_dir = Config.DATA_DIR / "spawn" / spawn_id
+            try:
+                shutil.rmtree(spawn_dir)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(
+                    "Failed to remove spawn dir %s: %s. The child SSH private key may "
+                    "still be on disk — operator should clean up manually.",
+                    spawn_dir, e,
+                )
 
     # ── failsafe guard ──────────────────────────────────────────
 

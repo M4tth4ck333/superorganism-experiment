@@ -13,6 +13,10 @@ from utils import setup_logger
 logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
 
+class SporeStackError(Exception):
+    """Raised when a SporeStack call fails (HTTP/network error), distinct from a successful empty response."""
+
+
 def get_info(token: str) -> Optional[dict]:
     """
     Get token info from SporeStack API.
@@ -81,20 +85,26 @@ def calculate_monthly_vps_cost(flavor: str, provider: str) -> int:
     return Config.VPS_MONTHLY_COST_CENTS
 
 
-def get_servers(token: str) -> Optional[list]:
+def get_servers(token: str) -> list:
     """
-    Get active (non-forgotten, non-deleted) servers from SporeStack API for this token.
+    Get active (non-forgotten, non-deleted) servers for this token.
+
+    Returns [] on a successful empty response. Raises SporeStackError on any
+    HTTP/network failure so callers can't conflate a transient outage with
+    "no servers exist" — critical for orphan-server adoption during spawn recovery.
     """
     try:
         url = f"https://api.sporestack.com/token/{token}/servers?include_forgotten=false&include_deleted=false"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status != 200:
-                return None
+                raise SporeStackError(f"get_servers HTTP {resp.status}")
             data = json.loads(resp.read().decode())
-            return data.get("servers")
-    except Exception:
-        return None
+    except SporeStackError:
+        raise
+    except Exception as e:
+        raise SporeStackError(f"get_servers failed: {e}") from e
+    return data.get("servers") or []
 
 
 def generate_token() -> Optional[str]:

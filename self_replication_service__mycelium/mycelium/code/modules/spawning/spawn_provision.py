@@ -45,24 +45,41 @@ def _pick_host(server: dict) -> tuple[str, str, Optional[str]]:
 def _adopt_orphan_server(sporestack_token: str) -> Optional[dict]:
     """Look for a server already launched under this token (from a prior crashed launch).
 
-    The token is allocated per-spawn, so any server under it is ours. If multiple
-    exist (a diagnostic — should not happen on a single-restart path), log CRITICAL
-    and pick the most recently created one so the pipeline can proceed.
+    Token is per-spawn so any server under it is ours. Raises SpawnError on a
+    SporeStack API failure — re-launching after a transient outage would
+    double-provision a paid VPS that DELETE cannot refund.
     """
-    servers = sporestack_client.get_servers(sporestack_token)
+    try:
+        servers = sporestack_client.get_servers(sporestack_token)
+    except sporestack_client.SporeStackError as e:
+        raise SpawnError(
+            "provision",
+            f"orphan check failed (cannot distinguish 'no servers' from API outage): {e}",
+        ) from e
     if not servers:
         return None
     if len(servers) > 1:
         ids = [s.get("machine_id") for s in servers]
         logger.critical(
             "Multiple servers (%d) found under spawn token — orphaned from a prior failure. "
-            "machine_ids=%s. Proceeding with the most recently created one; operator must "
-            "manually reconcile the others (SporeStack delete does NOT refund).",
+            "machine_ids=%s. Will pick the most recently created one if timestamps allow; "
+            "operator must reconcile the others (SporeStack delete does NOT refund).",
             len(servers), ids,
         )
 
     def _created_at(s):
-        return s.get("created_at") or s.get("created") or 0
+        ts = s.get("created_at") or s.get("created") or 0
+        try:
+            return int(ts)
+        except (TypeError, ValueError):
+            return 0
+
+    if len(servers) > 1 and all(_created_at(s) == 0 for s in servers):
+        raise SpawnError(
+            "provision",
+            f"multiple orphan servers under token but no usable created_at timestamp "
+            f"to disambiguate; refusing to guess. machine_ids={[s.get('machine_id') for s in servers]}",
+        )
     return sorted(servers, key=_created_at)[-1]
 
 
