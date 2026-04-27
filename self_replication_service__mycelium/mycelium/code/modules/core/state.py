@@ -72,28 +72,66 @@ class NodePersistentState:
         self.set("spawn_id", spawn_id)
         self.set("spawn_started_at", time.time())
 
+    # Keys written by the spawn pipeline that must be cleared on completion so
+    # they don't leak into the next spawn. Kept in one list so adding a new
+    # intent key only requires updating this set and the writer.
+    _SPAWN_KEYS_TO_CLEAR = (
+        "spawn_id",
+        "spawn_started_at",
+        "spawn_identity",
+        "spawn_vps_info",
+        "spawn_child_wallet",
+        "spawn_sporestack_token",
+        "spawn_funding_intent",
+        "spawn_funding_txid",
+        "spawn_vps_intent",
+        "spawn_transfer_intent",
+        "spawn_transfer_txid",
+    )
+
     def mark_spawn_completed(self, success: bool, child_btc_address: str = "") -> None:
+        """Atomically clear spawn state in one SQL transaction.
+
+        A crash between the old individual set/delete calls could leave the
+        node with (e.g.) spawn_in_progress=False but spawn_identity still set,
+        which would confuse the next spawn. Filesystem rmtree runs after the
+        commit — it's not critical to atomicity and can fail benignly.
+        """
         spawn_id = self.get_spawn_id()
-        self.set("spawn_in_progress", False)
+        started_at = self.get("spawn_started_at", 0)
+        history = self.get("spawn_history", []) if success else None
         if success:
-            history = self.get("spawn_history", [])
             history.append({
                 "spawn_id": spawn_id,
                 "child_btc_address": child_btc_address,
-                "started_at": self.get("spawn_started_at", 0),
+                "started_at": started_at,
                 "completed_at": time.time(),
                 "success": True,
             })
-            self.set("spawn_history", history)
-            if spawn_id:
-                shutil.rmtree(
-                    Config.DATA_DIR / "spawn" / spawn_id,
-                    ignore_errors=True,
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute(
+                "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                ("spawn_in_progress", json.dumps(False)),
+            )
+            if success:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                    ("spawn_history", json.dumps(history)),
                 )
-        self.delete("spawn_id")
-        self.delete("spawn_started_at")
-        self.delete("spawn_identity")
-        self.delete("spawn_vps_info")
+            for key in self._SPAWN_KEYS_TO_CLEAR:
+                self._conn.execute("DELETE FROM state WHERE key = ?", (key,))
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+        if success and spawn_id:
+            shutil.rmtree(
+                Config.DATA_DIR / "spawn" / spawn_id,
+                ignore_errors=True,
+            )
 
     # ── failsafe guard ──────────────────────────────────────────
 

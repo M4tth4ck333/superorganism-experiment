@@ -44,6 +44,36 @@ def _load_stored_vps(ps, spawn_id: str):
         return None
 
 
+_INTENT_KEYS = (
+    "spawn_identity",
+    "spawn_child_wallet",
+    "spawn_sporestack_token",
+    "spawn_funding_intent",
+    "spawn_funding_txid",
+    "spawn_vps_intent",
+    "spawn_vps_info",
+    "spawn_transfer_intent",
+    "spawn_transfer_txid",
+)
+
+
+def _log_intent_summary(ps, spawn_id: str) -> None:
+
+    present = []
+    for key in _INTENT_KEYS:
+        blob = ps.get(key)
+        if blob is None:
+            continue
+        # Flat string values (txids) and dict values (intents) both count.
+        if isinstance(blob, dict) and blob.get("spawn_id") not in (None, spawn_id):
+            continue
+        present.append(key)
+    if present:
+        logger.info("Resume state: persisted keys for spawn_id=%s → %s", spawn_id, present)
+    else:
+        logger.info("Fresh spawn: no persisted intent/result keys for spawn_id=%s", spawn_id)
+
+
 async def _safe_disconnect(ssh_deployer) -> None:
     """Disconnect SSH off the event loop with a bounded timeout."""
     try:
@@ -71,6 +101,7 @@ async def spawn_child(node_state: NodeState, caution_trait: float, spawn_id: str
 
     ssh_deployer = None
     logger.info("=== Spawn pipeline start: spawn_id=%s ===", spawn_id)
+    _log_intent_summary(ps, spawn_id)
     try:
         # Step 1: identity (reuse if already minted & funded)
         identity = _load_stored_identity(ps, spawn_id)
