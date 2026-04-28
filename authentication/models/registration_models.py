@@ -5,6 +5,15 @@ from datetime import datetime
 
 
 @dataclass(frozen=True)
+class RegistrationResult:
+    success: bool
+    public_key_hex: str | None
+    reason: str | None
+    txid: str | None = None
+    registered_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class StoredRegistration:
     """
     Persisted registration record containing a key-pair, transaction ID, and registration

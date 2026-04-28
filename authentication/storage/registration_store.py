@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from authentication.models.registration_flow_models import StoredRegistration
+from authentication.models.registration_models import StoredRegistration
 
 
 class RegistrationStore(Protocol):

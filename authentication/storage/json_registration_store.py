@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from authentication.models.registration_flow_models import StoredRegistration
+from authentication.models.registration_models import StoredRegistration
 from authentication.storage.registration_store import RegistrationStore
 
 

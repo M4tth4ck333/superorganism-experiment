@@ -5,7 +5,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from authentication.identity.identity_generator import IdentityGenerator
 from authentication.identity.models import ApplicationIdentity
-from authentication.registration_commitment_utils import compute_registration_commitment
 
 
 class Ed25519IdentityGenerator(IdentityGenerator):
@@ -38,10 +37,7 @@ class Ed25519IdentityGenerator(IdentityGenerator):
         private_key_hex = private_key_bytes.hex()
         public_key_hex = public_key_bytes.hex()
 
-        registration_commitment_hex = compute_registration_commitment(public_key_bytes)
-
         return ApplicationIdentity(
             public_key_hex=public_key_hex,
             private_key_hex=private_key_hex,
-            registration_commitment_hex=registration_commitment_hex,
         )
