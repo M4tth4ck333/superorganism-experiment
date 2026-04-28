@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Any
 
 import requests
 
+from lib.config import CFG
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,12 +32,12 @@ class SporeStackClient:
     BASE_URL = "https://api.sporestack.com"
     DEFAULT_TIMEOUT = 30
 
-    # Default server config ~ $46.20
-    DEFAULT_PROVIDER = "sporestack"
-    DEFAULT_FLAVOR = "sporestack-eu-4gb"
-    DEFAULT_REGION = "ams"  # Amsterdam
-    DEFAULT_OS = "ubuntu-24.04"
-    DEFAULT_DAYS = 30
+    DEFAULT_PROVIDER = CFG["provider"]
+    DEFAULT_FLAVOR = CFG["flavor"]
+    DEFAULT_REGION = CFG["region"]
+    DEFAULT_OS = CFG["os"]
+    DEFAULT_DAYS = CFG["days"]
+    DEFAULT_BILLING_CYCLE = CFG["billing_cycle"]
 
     def __init__(self, token: str):
         self.token = token
@@ -127,6 +129,7 @@ class SporeStackClient:
         operating_system: Optional[str] = None,
         provider: Optional[str] = None,
         days: Optional[int] = None,
+        billing_cycle: Optional[str] = None,
         hostname: Optional[str] = None,
         autorenew: bool = True,
         region: Optional[str] = None,
@@ -136,7 +139,9 @@ class SporeStackClient:
         flavor = flavor or self.DEFAULT_FLAVOR
         operating_system = operating_system or self.DEFAULT_OS
         provider = provider or self.DEFAULT_PROVIDER
-        days = days or self.DEFAULT_DAYS
+        if days is None:
+            days = self.DEFAULT_DAYS
+        billing_cycle = billing_cycle or self.DEFAULT_BILLING_CYCLE
         region = region or self.DEFAULT_REGION
 
         payload = {
@@ -144,9 +149,11 @@ class SporeStackClient:
             "ssh_key": ssh_key,
             "operating_system": operating_system,
             "provider": provider,
-            "days": days,
+            "billing_cycle": billing_cycle,
             "region": region,
         }
+        if days is not None:
+            payload["days"] = days
 
         if hostname:
             payload["hostname"] = hostname
@@ -157,7 +164,7 @@ class SporeStackClient:
 
         logger.info(
             f"Launching server: {flavor} on {provider} "
-            f"with {operating_system} for {days} days in {region}"
+            f"with {operating_system} for {days or 'default billing period'} days in {region}"
         )
 
         try:
@@ -217,7 +224,7 @@ class SporeStackClient:
         timeout: int = 300,
         poll_interval: int = 10
     ) -> Dict[str, Any]:
-        """Wait for server to have an IPv4 address. Raises ServerNotReadyError on timeout."""
+        """Wait for server to have a usable IP address. Raises ServerNotReadyError on timeout."""
         logger.info(f"Waiting for server {machine_id} to be ready...")
         start_time = time.time()
 
@@ -225,8 +232,11 @@ class SporeStackClient:
             server = self.get_server(machine_id)
 
             ipv4 = server.get("ipv4")
-            if ipv4 and ipv4 != "0.0.0.0":
-                logger.info(f"Server ready: {ipv4}")
+            ipv6 = server.get("ipv6")
+            has_ipv4 = ipv4 and ipv4 != "0.0.0.0"
+            has_ipv6 = ipv6 and ipv6 not in ("", "::")
+            if has_ipv4 or has_ipv6:
+                logger.info(f"Server ready: {ipv4 or ipv6}")
                 return server
 
             logger.debug(f"Server not ready yet, waiting {poll_interval}s...")
@@ -249,7 +259,7 @@ class SporeStackClient:
         self,
         flavor: str,
         days: int,
-        provider: str = "digitalocean"
+        provider: str = "sporestack_eu"
     ) -> Dict[str, Any]:
         """Get price quote for a server configuration."""
         return self._request(

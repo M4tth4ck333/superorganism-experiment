@@ -1,16 +1,18 @@
-"""SSH-based deployment module for remote server provisioning."""
+"""SSH-based deployment mechanics for provisioning child mycelium nodes."""
 
-import logging
 import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import paramiko
 from scp import SCPClient
 
-logger = logging.getLogger(__name__)
+from config import Config
+from utils import setup_logger
+
+logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
 
 class DeployerError(Exception):
@@ -28,7 +30,7 @@ class CommandError(DeployerError):
     pass
 
 
-class Deployer:
+class SSHDeployer:
     """SSH-based deployer for remote server setup and mycelium deployment."""
 
     MYCELIUM_REPO_URL = "https://github.com/Tribler/superorganism-experiment.git"
@@ -85,7 +87,7 @@ class Deployer:
         for key_name, key_class in key_classes:
             try:
                 key = key_class.from_private_key_file(key_path)
-                logger.debug(f"Loaded {key_name} key from {key_path}")
+                logger.debug("Loaded %s key from %s", key_name, key_path)
                 return key
             except paramiko.SSHException:
                 continue
@@ -126,13 +128,12 @@ class Deployer:
         else:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        # Load private key (auto-detect key type)
         private_key = self._load_private_key()
 
         last_error = None
         for attempt in range(1, retry_count + 1):
             try:
-                logger.info(f"Connecting to {user}@{host}:{port} (attempt {attempt}/{retry_count})")
+                logger.info("Connecting to %s@%s:%d (attempt %d/%d)", user, host, port, attempt, retry_count)
 
                 self.client.connect(
                     hostname=host,
@@ -145,14 +146,14 @@ class Deployer:
                 )
 
                 self.client.save_host_keys(str(self.known_hosts_path))
-                logger.info(f"Connected to {host}")
+                logger.info("Connected to %s", host)
                 return
 
             except Exception as e:
                 last_error = e
-                logger.warning(f"Connection attempt {attempt} failed: {e}")
+                logger.warning("Connection attempt %d failed: %s", attempt, e)
                 if attempt < retry_count:
-                    logger.info(f"Retrying in {retry_delay}s...")
+                    logger.info("Retrying in %ds...", retry_delay)
                     time.sleep(retry_delay)
 
         raise SSHConnectionError(f"Failed to connect after {retry_count} attempts: {last_error}")
@@ -161,7 +162,7 @@ class Deployer:
         if self.client:
             self.client.close()
             self.client = None
-            logger.info(f"Disconnected from {self.host}")
+            logger.info("Disconnected from %s", self.host)
 
     def run_command(
         self,
@@ -174,12 +175,11 @@ class Deployer:
         if not self.client:
             raise DeployerError("Not connected. Call connect() first.")
 
-        logger.debug(f"Running: {command}")
+        logger.debug("Running: %s", command)
 
         stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
 
         if background:
-            # Don't wait for exit status on background commands
             return "", "", 0
 
         exit_code = stdout.channel.recv_exit_status()
@@ -199,19 +199,17 @@ class Deployer:
         if not self.client:
             raise DeployerError("Not connected. Call connect() first.")
 
-        logger.info(f"Uploading {local_path} -> {remote_path}")
+        logger.info("Uploading %s -> %s", local_path, remote_path)
 
         with SCPClient(self.client.get_transport()) as scp:
             scp.put(local_path, remote_path)
 
     def upload_directory(self, local_path: str, remote_path: str) -> None:
         """Upload a directory using rsync over SSH."""
-        logger.info(f"Uploading directory {local_path} -> {remote_path}")
+        logger.info("Uploading directory %s -> %s", local_path, remote_path)
 
-        # Ensure remote directory exists
         self.run_command(f"mkdir -p {remote_path}")
 
-        # Use rsync for efficient directory sync
         rsync_cmd = [
             "rsync", "-avz", "--progress",
             "-e", f"ssh -i {self.ssh_key_path} -p {self.port} -o StrictHostKeyChecking=yes -o UserKnownHostsFile={self.known_hosts_path}",
@@ -219,22 +217,13 @@ class Deployer:
             f"{self.user}@{self.host}:{remote_path}/"
         ]
 
-        logger.debug(f"Running: {' '.join(rsync_cmd)}")
+        logger.debug("Running: %s", ' '.join(rsync_cmd))
         result = subprocess.run(rsync_cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
             raise DeployerError(f"rsync failed: {result.stderr}")
 
         logger.info("Directory upload complete")
-
-    def download_file(self, remote_path: str, local_path: str) -> None:
-        if not self.client:
-            raise DeployerError("Not connected. Call connect() first.")
-
-        logger.info(f"Downloading {remote_path} -> {local_path}")
-
-        with SCPClient(self.client.get_transport()) as scp:
-            scp.get(remote_path, local_path)
 
     def _wait_for_apt_lock(self, timeout: int = 300) -> None:
         """Wait for apt/dpkg locks to be released (e.g. after fresh VPS boot)."""
@@ -249,7 +238,7 @@ class Deployer:
     def _configure_github_access(self) -> None:
         """On IPv6-only VPS, add /etc/hosts overrides for the GitHub IPv6 proxy."""
         if ':' not in (self.host or ''):
-            return  # IPv4 host — direct access works fine
+            return
         logger.info("IPv6-only VPS: configuring GitHub IPv6 proxy via /etc/hosts...")
         self.run_command(
             "grep -q 'github-ipv6-proxy' /etc/hosts || "
@@ -264,7 +253,7 @@ class Deployer:
         )
 
     def install_dependencies(self) -> None:
-        """Install system dependencies (Python3, pip, git, libsodium-dev)."""
+        """Install system dependencies (Python3, pip, git, libsodium-dev, deno)."""
         logger.info("Installing system dependencies...")
 
         self._configure_github_access()
@@ -288,7 +277,6 @@ class Deployer:
             timeout=300
         )
 
-        # Install deno (required by yt-dlp for YouTube JS extraction)
         _, _, deno_check = self.run_command("which deno", check=False)
         if deno_check != 0:
             logger.info("Installing deno...")
@@ -300,7 +288,7 @@ class Deployer:
         logger.info("System dependencies installed")
 
     def setup_firewall(self, extra_ports: Optional[list] = None) -> None:
-        """Configure UFW firewall: SSH, BitTorrent ports, plus any extra_ports."""
+        """Configure UFW firewall: SSH, BitTorrent ports, IPv8, plus any extra_ports."""
         logger.info("Configuring firewall...")
         self.run_command("apt-get install -y ufw", timeout=60)
         self.run_command("ufw --force reset", check=False)
@@ -314,11 +302,11 @@ class Deployer:
         if extra_ports:
             for port in extra_ports:
                 self.run_command(f"ufw allow {port}")
-                logger.info(f"Allowed extra port: {port}")
+                logger.info("Allowed extra port: %s", port)
 
         self.run_command("ufw --force enable")
         stdout, _, _ = self.run_command("ufw status verbose", check=False)
-        logger.info(f"Firewall status:\n{stdout}")
+        logger.info("Firewall status:\n%s", stdout)
 
         logger.info("Firewall configured successfully")
 
@@ -328,16 +316,11 @@ class Deployer:
         branch: str = "main",
         subpath: Optional[str] = None
     ) -> None:
-        """Clone and set up mycelium repository using sparse checkout from monorepo.
-
-        The repo is cloned directly into REMOTE_BASE_DIR with sparse checkout,
-        keeping the git working tree intact so that 'git pull' works for auto-updates.
-        Files live at REMOTE_BASE_DIR/self_replication_service__mycelium/mycelium/.
-        """
+        """Clone repo with sparse checkout into REMOTE_BASE_DIR, or pull if it exists."""
         repo_url = repo_url or self.MYCELIUM_REPO_URL
         subpath = subpath or self.MYCELIUM_SUBPATH
 
-        logger.info(f"Deploying mycelium from {repo_url} (subpath: {subpath})")
+        logger.info("Deploying mycelium from %s (subpath: %s)", repo_url, subpath)
 
         self.run_command(f"mkdir -p {self.REMOTE_CONTENT_DIR}")
         self.run_command(f"mkdir -p {self.REMOTE_LOG_DIR}")
@@ -378,7 +361,7 @@ class Deployer:
         if not Path(local_path).exists():
             raise DeployerError(f"Video IDs file not found: {local_path}")
 
-        logger.info(f"Uploading video IDs file: {local_path} -> {self.REMOTE_VIDEO_IDS_FILE}")
+        logger.info("Uploading video IDs file: %s -> %s", local_path, self.REMOTE_VIDEO_IDS_FILE)
         self.upload_file(local_path, self.REMOTE_VIDEO_IDS_FILE)
         logger.info("Video IDs file deployed successfully")
 
@@ -387,19 +370,9 @@ class Deployer:
         if not Path(local_path).exists():
             raise DeployerError(f"Cookies file not found: {local_path}")
 
-        logger.info(f"Uploading cookies file: {local_path} -> {self.REMOTE_COOKIES_FILE}")
+        logger.info("Uploading cookies file: %s -> %s", local_path, self.REMOTE_COOKIES_FILE)
         self.upload_file(local_path, self.REMOTE_COOKIES_FILE)
         logger.info("Cookies file deployed successfully")
-
-    def deploy_content(self, content_dir: str) -> None:
-        """Upload content files to remote server."""
-        logger.info(f"Deploying content from {content_dir}")
-
-        if not Path(content_dir).exists():
-            raise DeployerError(f"Content directory not found: {content_dir}")
-
-        self.upload_directory(content_dir, self.REMOTE_CONTENT_DIR)
-        logger.info("Content deployed successfully")
 
     def set_environment_variable(self, name: str, value: str) -> None:
         escaped_value = value.replace("'", "'\\''")
@@ -408,32 +381,15 @@ class Deployer:
             f"echo \"{name}='{escaped_value}'\" >> /etc/environment"
         )
 
-    def sporestack_token_deployed(self) -> bool:
-        """Return True if the SporeStack token has already been deployed."""
-        _, _, exit_code = self.run_command(
-            f"test -f {self.REMOTE_DATA_DIR}/sporestack_token", check=False
-        )
-        return exit_code == 0
-
-    def video_ids_deployed(self) -> bool:
-        """Return True if the video IDs file has already been deployed."""
-        _, _, exit_code = self.run_command(
-            f"test -f {self.REMOTE_VIDEO_IDS_FILE}", check=False
-        )
-        return exit_code == 0
-
     def start_orchestrator(
         self,
-        btc_mnemonic: Optional[str] = None,
-        log_endpoint: Optional[str] = None,
-        log_secret: Optional[str] = None,
-        parent_name: str = "genesis",
-        sporestack_token: Optional[str] = None,
-        default_btc_address: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+        secrets: Optional[Dict[str, str]] = None,
     ) -> None:
+        """Write secrets (mode 600), set env vars, and start the orchestrator wrapper."""
         logger.info("Starting orchestrator...")
 
-        env_vars = {
+        env_vars: Dict[str, str] = {
             "MYCELIUM_BASE_DIR": self.REMOTE_BASE_DIR,
             "MYCELIUM_VENV_DIR": self.REMOTE_VENV_DIR,
             "MYCELIUM_CONTENT_DIR": self.REMOTE_CONTENT_DIR,
@@ -442,24 +398,13 @@ class Deployer:
             "MYCELIUM_VIDEO_IDS_FILE": self.REMOTE_VIDEO_IDS_FILE,
             "MYCELIUM_COOKIES_FILE": self.REMOTE_COOKIES_FILE,
         }
+        if env:
+            env_vars.update(env)
 
-        if btc_mnemonic:
-            self._write_secret_file(btc_mnemonic, f"{self.REMOTE_DATA_DIR}/btc_mnemonic_seed")
-        if sporestack_token and not self.sporestack_token_deployed():
-            self._write_secret_file(sporestack_token, f"{self.REMOTE_DATA_DIR}/sporestack_token")
-            logger.info("SporeStack token deployed")
-        if log_endpoint:
-            env_vars["MYCELIUM_LOG_ENDPOINT"] = log_endpoint
-        if log_secret:
-            env_vars["MYCELIUM_LOG_SECRET"] = log_secret
-        env_vars["MYCELIUM_PARENT_NAME"] = parent_name
-        env_vars["MYCELIUM_CAUTION_TRAIT"]          = "0.5"
-        env_vars["MYCELIUM_CAUTION_MUTATION_SIGMA"] = "0.05"
-        env_vars["MYCELIUM_SPAWN_THRESHOLD_DAYS"]   = "60"
-        env_vars["MYCELIUM_SPAWN_RESERVE_DAYS"]     = "30"
-        env_vars["MYCELIUM_INHERITANCE_RATIO"]      = "0.4"
-        if default_btc_address:
-            env_vars["MYCELIUM_DEFAULT_BTC_ADDRESS"] = default_btc_address
+        if secrets:
+            for remote_path, content in secrets.items():
+                self._write_secret_file(content, remote_path)
+
         for name, value in env_vars.items():
             self.set_environment_variable(name, value)
 
@@ -486,13 +431,6 @@ class Deployer:
 
         logger.info("Orchestrator started successfully")
 
-    def wallet_initialized(self) -> bool:
-        """Return True if the VPS wallet has already been initialized."""
-        _, _, exit_code = self.run_command(
-            f"test -f {self.REMOTE_DATA_DIR}/mnemonic.txt", check=False
-        )
-        return exit_code == 0
-
     def check_health(self) -> bool:
         """Return True if orchestrator is running."""
         stdout, _, exit_code = self.run_command(
@@ -500,7 +438,7 @@ class Deployer:
             check=False
         )
 
-        is_healthy = exit_code == 0 and stdout.strip()
+        is_healthy = exit_code == 0 and bool(stdout.strip())
 
         if is_healthy:
             logger.info("Health check passed")
@@ -508,13 +446,6 @@ class Deployer:
             logger.warning("Health check failed - orchestrator not running")
 
         return is_healthy
-
-    def get_logs(self, lines: int = 50) -> str:
-        stdout, _, _ = self.run_command(
-            f"tail -n {lines} {self.REMOTE_LOG_DIR}/orchestrator.log 2>/dev/null || echo 'No logs yet'",
-            check=False
-        )
-        return stdout
 
 
 def generate_ssh_keypair(
@@ -549,7 +480,5 @@ def generate_ssh_keypair(
     with open(pub_path) as f:
         public_key = f.read().strip()
 
-    logger.info(f"Generated SSH keypair: {key_path}")
+    logger.info("Generated SSH keypair: %s", key_path)
     return str(key_path), public_key
-
-

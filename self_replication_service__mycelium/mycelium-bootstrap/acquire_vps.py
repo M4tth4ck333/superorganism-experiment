@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+from lib.config import CFG
 from lib.deployer import generate_ssh_keypair
 from lib.provisioner import SporeStackClient, SporeStackError
 
@@ -16,16 +17,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_SSH_KEY_DIR = Path.home() / ".mycelium" / "ssh"
-DEFAULT_SSH_KEY_PATH = DEFAULT_SSH_KEY_DIR / "deploy_key"
-TOKEN_FILE = Path.home() / ".mycelium" / "sporestack_token"
-SERVER_INFO_FILE = Path.home() / ".mycelium" / "server.json"
+DEFAULT_SSH_KEY_PATH = CFG["ssh_key_path"]
+TOKEN_FILE = CFG["token_file"]
+SERVER_INFO_FILE = CFG["server_info_file"]
 
-# Defaults from SporeStackClient
-DEFAULT_FLAVOR = SporeStackClient.DEFAULT_FLAVOR
-DEFAULT_OS = SporeStackClient.DEFAULT_OS
-DEFAULT_PROVIDER = SporeStackClient.DEFAULT_PROVIDER
-DEFAULT_DAYS = SporeStackClient.DEFAULT_DAYS
+DEFAULT_FLAVOR = CFG["flavor"]
+DEFAULT_OS = CFG["os"]
+DEFAULT_PROVIDER = CFG["provider"]
+DEFAULT_DAYS = CFG["days"]
 
 
 def load_token() -> str | None:
@@ -77,9 +76,12 @@ def acquire(
     balance = sporestack.get_balance()
     logger.info(f"Balance: {balance.get('usd', 'N/A')}")
 
-    # Get quote
-    quote = sporestack.get_quote(flavor, days, provider)
-    logger.info(f"Server cost: {quote.get('usd', 'N/A')} for {days} days")
+    # Get quote (not supported for all providers)
+    try:
+        quote = sporestack.get_quote(flavor, days, provider)
+        logger.info(f"Server cost: {quote.get('usd', 'N/A')} for {days} days")
+    except SporeStackError:
+        logger.info("Price quote not available for this provider, proceeding anyway")
 
     # Launch server
     logger.info(f"Launching server: {hostname}")
@@ -97,14 +99,18 @@ def acquire(
     logger.info("Waiting for server to be ready...")
     server = sporestack.wait_for_server_ready(machine_id, timeout=300)
 
-    host = server["ipv4"]
+    ipv4 = server.get("ipv4", "")
+    ipv6 = server.get("ipv6", "")
+    host = (ipv4 if ipv4 and ipv4 != "0.0.0.0" else None) or (ipv6 if ipv6 and ipv6 not in ("", "::") else None)
     ssh_port = server.get("ssh_port", 22)
     logger.info(f"Server ready: {host}:{ssh_port}")
 
     # Save server info
     server_info = {
         "machine_id": machine_id,
-        "ipv4": host,
+        "host": host,
+        "ipv4": ipv4,
+        "ipv6": ipv6,
         "ssh_port": ssh_port,
         "hostname": hostname,
         "provider": provider,
@@ -115,6 +121,8 @@ def acquire(
     }
     save_server_info(server_info)
 
+    ssh_host = f"{host}" if ":" in host else host
+
     # Print success
     print()
     print("=" * 60)
@@ -122,7 +130,7 @@ def acquire(
     print("=" * 60)
     print(f"Machine ID: {machine_id}")
     print(f"IP Address: {host}")
-    print(f"SSH: ssh -i {private_key_path} root@{host}")
+    print(f"SSH: ssh -i {private_key_path} root@{ssh_host}")
     print()
     print("Next step: python deploy_mycelium.py")
     print("=" * 60)

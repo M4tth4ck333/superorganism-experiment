@@ -17,6 +17,7 @@ class SidebarWidget(QFrame):
     issues_clicked = Signal()
     my_issues_clicked = Signal()
     voting_history_clicked = Signal()
+    experiment_clicked = Signal()
     settings_clicked = Signal()
     create_clicked = Signal()
 
@@ -54,6 +55,7 @@ class SidebarWidget(QFrame):
         self.issues_btn = QPushButton("Issues")
         self.my_issues_btn = QPushButton("My Issues")
         self.voting_history_btn = QPushButton("Voting History")
+        self.experiment_btn = QPushButton("AutoResearch")
         self.settings_btn = QPushButton("Settings")
 
         self._nav_buttons = (
@@ -62,6 +64,7 @@ class SidebarWidget(QFrame):
             self.issues_btn,
             self.my_issues_btn,
             self.voting_history_btn,
+            self.experiment_btn,
             self.settings_btn,
         )
 
@@ -123,6 +126,7 @@ class SidebarWidget(QFrame):
         self.issues_btn.clicked.connect(self.issues_clicked.emit)
         self.my_issues_btn.clicked.connect(self.my_issues_clicked.emit)
         self.voting_history_btn.clicked.connect(self.voting_history_clicked.emit)
+        self.experiment_btn.clicked.connect(self.experiment_clicked.emit)
         self.settings_btn.clicked.connect(self.settings_clicked.emit)
         self.create_btn.clicked.connect(self.create_clicked.emit)
 
@@ -133,6 +137,7 @@ class SidebarWidget(QFrame):
             "issues": self.issues_btn,
             "my_issues": self.my_issues_btn,
             "voting_history": self.voting_history_btn,
+            "experiment": self.experiment_btn,
             "settings": self.settings_btn,
         }
 

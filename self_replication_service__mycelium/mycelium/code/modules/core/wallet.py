@@ -8,8 +8,9 @@ persists mnemonic to disk (chmod 600), and removes the env var from
 
 import logging
 import os
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from bitcoinlib.wallets import Wallet
 
@@ -28,6 +29,23 @@ class WalletError(Exception):
     pass
 
 
+def parse_bitcoin_uri(uri: str) -> Optional[Tuple[str, int]]:
+    """Parse BIP-21 bitcoin:ADDRESS?amount=BTC → (address, amount_sat) or None."""
+    if not uri.startswith("bitcoin:"):
+        return None
+    parts = uri[8:].split("?")
+    address = parts[0]
+    amount_btc = None
+    if len(parts) > 1:
+        for param in parts[1].split("&"):
+            if param.startswith("amount="):
+                amount_btc = float(param[7:])
+                break
+    if not address or amount_btc is None:
+        return None
+    return address, int(amount_btc * 100_000_000)
+
+
 def _remove_from_etc_environment(key: str) -> None:
     """Remove a KEY=... line from /etc/environment, ignoring errors."""
     env_file = Path("/etc/environment")
@@ -40,9 +58,9 @@ def _remove_from_etc_environment(key: str) -> None:
         tmp.write_text("\n".join(filtered) + "\n")
         tmp.chmod(0o644)
         tmp.replace(env_file)
-        logger.info(f"Removed {key} from /etc/environment")
+        logger.info("Removed %s from /etc/environment", key)
     except Exception as e:
-        logger.warning(f"Could not remove {key} from /etc/environment: {e}")
+        logger.warning("Could not remove %s from /etc/environment: %s", key, e)
 
 
 class SpendingWallet:
@@ -73,7 +91,7 @@ class SpendingWallet:
         """Scan blockchain for transactions and update balance."""
         logger.info("Scanning blockchain for transactions...")
         self._wallet.scan()
-        logger.info(f"Scan complete. Balance: {self.get_balance_btc()} BTC")
+        logger.info("Scan complete. Balance: %s BTC", self.get_balance_btc())
 
     def send(self, address: str, amount_satoshis: int, fee=None) -> str:
         """Send Bitcoin to address. Returns txid."""
@@ -86,7 +104,7 @@ class SpendingWallet:
                 f"Required: {amount_satoshis} sat"
             )
 
-        logger.info(f"Sending {amount_satoshis} sat to {address}")
+        logger.info("Sending %d sat to %s", amount_satoshis, address)
         tx = self._wallet.send_to(address, amount_satoshis, fee=fee, broadcast=False)
 
         if not tx.verified:
@@ -96,10 +114,80 @@ class SpendingWallet:
         result = srv.sendrawtransaction(tx.raw_hex())
 
         if result and result.get("txid"):
-            logger.info(f"Transaction sent: {tx.txid}")
+            logger.info("Transaction sent: %s", tx.txid)
             return tx.txid
 
         raise WalletError(f"Broadcast failed: {result}")
+
+    def sweep_all(self, address: str, fee_per_kb: int = None) -> str:
+        """Send entire balance to address, fee auto-calculated by bitcoinlib. Returns txid."""
+        tx = self._wallet.sweep(address, broadcast=True, fee_per_kb=fee_per_kb)
+        if not tx or not tx.txid:
+            raise WalletError(f"Sweep failed: {getattr(tx, 'error', 'unknown error')}")
+        logger.info("Sweep complete: %s", tx.txid)
+        return tx.txid
+
+
+# How long to keep re-querying the indexer before we accept "no prior tx exists"
+# on a reconcile path. Mempool propagation on signet/testnet can lag well beyond
+# the bitcoinlib transactions_update default; without this poll a freshly
+# broadcast tx that hasn't reached the indexer yet would be re-broadcast,
+# double-paying.
+_RECONCILE_POLL_TIMEOUT_SECONDS = 90
+_RECONCILE_POLL_INTERVAL_SECONDS = 10
+
+
+def scan_for_prior_send(
+    wallet: "SpendingWallet",
+    address: str,
+    amount_sat: int,
+) -> Optional[str]:
+    """One pass over bitcoinlib's stored transactions; returns matching outbound txid or None."""
+    try:
+        wallet._wallet.transactions_update()
+    except Exception as e:
+        logger.warning("transactions_update failed during reconcile: %s", e)
+
+    try:
+        txs = wallet._wallet.transactions_full()
+    except Exception as e:
+        logger.warning("transactions_full failed during reconcile: %s", e)
+        return None
+
+    for tx in txs or []:
+        if not getattr(tx, "is_send", True):
+            continue
+        outputs = getattr(tx, "outputs", None) or []
+        for out in outputs:
+            out_addr = getattr(out, "address", None)
+            out_value = getattr(out, "value", None)
+            if out_addr == address and int(out_value or 0) == amount_sat:
+                txid = getattr(tx, "txid", None) or getattr(tx, "hash", None)
+                if txid:
+                    return txid
+    return None
+
+
+def find_prior_send(
+    wallet: "SpendingWallet",
+    address: str,
+    amount_sat: int,
+) -> Optional[str]:
+    """Poll bitcoinlib's indexer for up to _RECONCILE_POLL_TIMEOUT_SECONDS for a matching outbound tx.
+
+    A just-broadcast tx may not be visible to the indexer for seconds-to-minutes;
+    a single scan that misses it would cause a double-broadcast. None means we
+    polled to timeout and still saw nothing — caller must treat as "unknown"
+    (do NOT re-broadcast blindly).
+    """
+    start = time.time()
+    while True:
+        txid = scan_for_prior_send(wallet, address, amount_sat)
+        if txid:
+            return txid
+        if time.time() - start >= _RECONCILE_POLL_TIMEOUT_SECONDS:
+            return None
+        time.sleep(_RECONCILE_POLL_INTERVAL_SECONDS)
 
 
 # Module-level singleton
@@ -170,16 +258,16 @@ def initialize_wallet() -> None:
                 os.write(fd, mnemonic.encode())
             finally:
                 os.close(fd)
-            logger.info(f"Mnemonic persisted to {mnemonic_file} (mode 600)")
+            logger.info("Mnemonic persisted to %s (mode 600)", mnemonic_file)
 
             _remove_from_etc_environment("MYCELIUM_BTC_MNEMONIC")
             os.environ.pop("MYCELIUM_BTC_MNEMONIC", None)
 
         _wallet_instance = SpendingWallet(raw)
-        logger.info(f"Wallet ready. Address: {_wallet_instance.get_receiving_address()}")
+        logger.info("Wallet ready. Address: %s", _wallet_instance.get_receiving_address())
 
     except Exception as e:
-        logger.error(f"Failed to initialize wallet: {e}")
+        logger.error("Failed to initialize wallet: %s", e)
         _wallet_instance = None
 
 

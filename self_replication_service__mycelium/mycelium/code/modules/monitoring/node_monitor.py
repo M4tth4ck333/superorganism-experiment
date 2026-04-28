@@ -3,16 +3,17 @@ Aggregates BTC balance and SporeStack runway details into a NodeState.
 Decision loop and SeedboxInfoPayload broadcast consume info.
 """
 
-import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from modules import sporestack_client
-from modules.wallet import get_wallet
+from config import Config
+from utils import setup_logger
+from . import sporestack_client
+from ..core.wallet import get_wallet
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__, log_file=Config.LOG_DIR / "orchestrator.log", level=Config.LOG_LEVEL)
 
 
 @dataclass
@@ -21,7 +22,8 @@ class NodeState:
     sporestack_balance_cents: int = 0
     burn_rate_cents_per_day: int = 0
     cost_per_day_usd: float = 0.0
-    days_remaining: int = 0
+    days_remaining: Optional[int] = None
+    server_expiry_ts: int = 0        # Unix ts of running server lease end
     last_updated: float = 0.0
     vps_provider: str = ""
     vps_region: str = ""
@@ -61,10 +63,13 @@ class NodeMonitor:
             sporestack_balance_cents = 0
             burn_rate_cents_per_day = 0
             cost_per_day_usd = 0.0
-            days_remaining = 0
+            days_remaining = None
 
             vps_provider = ""
             vps_region = ""
+
+            server_expiry_ts = 0
+            server = None
 
             token = self._load_token()
             if token:
@@ -73,13 +78,29 @@ class NodeMonitor:
                     sporestack_balance_cents = int(data.get("balance_cents", 0))
                     burn_rate_cents_per_day = int(data.get("burn_rate_cents", 0))
                     cost_per_day_usd = round(burn_rate_cents_per_day / 100, 4)
-                    days_remaining = int(data.get("days_remaining", 0))
+                    # Do NOT use data.get("days_remaining") — SporeStack computes that as
+                    # balance/burn_rate which is always 0 for per-cycle-billed servers.
+                    # burn_rate_cents_per_day is always 0 for monthy-billed servers.
+                    # ONLY way to infer/get that information is to wait for /server/quote to support
+                    # the VPS provider used here and then to divide the quote's cost by 30.
 
-                servers = sporestack_client.get_servers(token)
+                try:
+                    servers = sporestack_client.get_servers(token)
+                except sporestack_client.SporeStackError as e:
+                    logger.warning("get_servers failed (monitor refresh): %s", e)
+                    servers = []
                 if servers:
-                    server = next((s for s in servers if s.get("running")), servers[0])
+                    server = servers[-1]
+                if server:
                     vps_provider = server.get("provider", "")
                     vps_region = server.get("region", "")
+                    server_expiry_ts = int(server.get("expiration", 0))
+
+                    # TODO: once SporeStack's /server/quote endpoint supports the VPS provider
+                    # used here, use it to get the cost per 30-day cycle and compute additional
+                    # runway from (sporestack_balance_cents + btc_as_cents) / cost_per_cycle * 30.
+                    if server_expiry_ts:
+                        days_remaining = max(0, int((server_expiry_ts - time.time()) / 86400))
 
             self._state = NodeState(
                 btc_balance_sat=btc_balance_sat,
@@ -87,6 +108,7 @@ class NodeMonitor:
                 burn_rate_cents_per_day=burn_rate_cents_per_day,
                 cost_per_day_usd=cost_per_day_usd,
                 days_remaining=days_remaining,
+                server_expiry_ts=server_expiry_ts,
                 last_updated=time.time(),
                 vps_provider=vps_provider,
                 vps_region=vps_region,

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
 import aiohttp
 from ipv8.configuration import ConfigBuilder, Strategy, WalkerDefinition, default_bootstrap_defs
@@ -18,11 +18,11 @@ from ipv8_service import IPv8
 
 from config import Config
 from utils import setup_logger
-from modules.liberation_community import LiberationCommunity, LiberatedContentPayload, SeedboxInfoPayload
-from modules.seedbox import Seedbox, ContentInfo
-from modules.wallet import get_wallet
-from modules.node_monitor import get_monitor
-from modules.peer_registry import get_registry
+from .liberation_community import LiberationCommunity, LiberatedContentPayload, SeedboxInfoPayload
+from .seedbox import Seedbox, ContentInfo
+from ..core.wallet import get_wallet
+from ..monitoring.node_monitor import get_monitor
+from ..monitoring.peer_registry import get_registry
 
 logger = setup_logger(
     __name__,
@@ -42,9 +42,6 @@ class LiberationAnnouncer:
         self.ipv8: Optional[IPv8] = None
         self.community: Optional[LiberationCommunity] = None
 
-        # Track announced content to avoid duplicates
-        self.announced_infohashes: Set[str] = set()
-
         # Seedbox info
         self._start_time: float = time.time()
         self._cached_public_ip: Optional[str] = None
@@ -57,9 +54,9 @@ class LiberationAnnouncer:
 
         key_path = Path(self.key_file)
         if key_path.exists():
-            logger.info(f"Using existing key: {key_path}")
+            logger.info("Using existing key: %s", key_path)
         else:
-            logger.info(f"Creating new key: {key_path}")
+            logger.info("Creating new key: %s", key_path)
 
         builder.add_key("liberation_peer", "medium", str(key_path))
 
@@ -95,60 +92,46 @@ class LiberationAnnouncer:
             self.community.set_seedbox_info_callback(registry.on_seedbox_info_received)
             logger.info("Peer registry wired to seedbox info callback")
 
+        self.community.set_new_peer_callback(self._send_all_content_to_peer)
+        logger.info("New-peer content burst callback registered")
+
         logger.info("LiberationCommunity is running")
-        logger.info(f"Community ID: {self.community.community_id.hex()}")
-        logger.info(f"My peer ID: {self.community.my_peer.mid.hex()[:16]}...")
+        logger.info("Community ID: %s", self.community.community_id.hex())
+        logger.info("My peer ID: %s...", self.community.my_peer.mid.hex()[:16])
 
     async def announce_content(self) -> int:
         """
         Announce all seeded content to the network.
 
         Returns:
-            Number of new content items announced
+            Number of peers reached across all content items
         """
         if not self.community:
             logger.warning("Cannot announce: community not initialized")
             return 0
 
         content_list = self.seedbox.get_content_for_broadcast()
-        new_announcements = 0
+        total_sent = 0
 
         for content in content_list:
-            # Extract infohash from magnet link
-            infohash = self._extract_infohash(content.magnet_link)
-            if not infohash:
-                continue
-
-            # Skip if already announced
-            if infohash in self.announced_infohashes:
-                continue
-
-            # Create payload
             payload = LiberatedContentPayload(
                 url=content.url or "",
                 license=content.license or "Creative Commons",
                 magnet_link=content.magnet_link,
                 timestamp=int(time.time())
             )
+            total_sent += self.community.broadcast_content(payload)
 
-            # Broadcast to peers
-            sent_count = self.community.broadcast_content(payload, infohash)
+        return total_sent
 
-            if sent_count > 0:
-                self.announced_infohashes.add(infohash)
-                new_announcements += 1
-                logger.info(f"Announced: {content.file_path.name} to {sent_count} peers")
-
-        return new_announcements
-
-    async def announce_loop(self, interval: int = 180) -> None:
+    async def announce_loop(self, interval: int = Config.CONTENT_BROADCAST_INTERVAL) -> None:
         """
-        Continuously announce content at regular intervals.
+        Periodically broadcast the full content list to all peers.
 
         Args:
-            interval: Seconds between announcement cycles
+            interval: Seconds between full-broadcast cycles
         """
-        logger.info(f"Starting announcement loop (interval: {interval}s)")
+        logger.info("Starting announcement loop (interval: %ds)", interval)
 
         while True:
             try:
@@ -156,12 +139,11 @@ class LiberationAnnouncer:
                 await asyncio.sleep(5)
 
                 peer_count = len(self.community.get_peers()) if self.community else 0
-                logger.info(f"Connected to {peer_count} peer(s)")
+                logger.info("Connected to %d peer(s)", peer_count)
 
                 if peer_count > 0:
-                    new_count = await self.announce_content()
-                    if new_count > 0:
-                        logger.info(f"Announced {new_count} new content items")
+                    sent_count = await self.announce_content()
+                    logger.info("Full periodic broadcast: %d payload(s) sent across all peers", sent_count)
 
                 await asyncio.sleep(interval)
 
@@ -169,8 +151,26 @@ class LiberationAnnouncer:
                 logger.info("Announcement loop cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in announcement loop: {e}")
+                logger.error("Error in announcement loop: %s", e)
                 await asyncio.sleep(interval)
+
+    async def _send_all_content_to_peer(self, peer) -> None:
+        """Send full content list to a newly connected peer."""
+        if not self.community:
+            return
+        content_list = self.seedbox.get_content_for_broadcast()
+        for content in content_list:
+            payload = LiberatedContentPayload(
+                url=content.url or "",
+                license=content.license or "Creative Commons",
+                magnet_link=content.magnet_link,
+                timestamp=int(time.time()),
+            )
+            try:
+                self.community.ez_send(peer, payload)
+            except Exception as e:
+                logger.warning("Failed initial burst to peer %s: %s", peer.mid.hex()[:16], e)
+        logger.info("Initial burst: %d items → new peer %s", len(content_list), peer.mid.hex()[:16])
 
     def _get_git_commit_hash(self) -> str:
         """Get short git commit hash of the running code."""
@@ -277,7 +277,6 @@ class LiberationAnnouncer:
     def get_stats(self) -> dict:
         """Get announcer statistics."""
         return {
-            "announced_content": len(self.announced_infohashes),
             "connected_peers": len(self.community.get_peers()) if self.community else 0,
             "community_active": self.community is not None
         }

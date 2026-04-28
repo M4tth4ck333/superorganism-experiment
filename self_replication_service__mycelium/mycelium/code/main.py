@@ -9,14 +9,15 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import modules.event_logger as event_logger
-import modules.node_monitor as node_monitor
-import modules.peer_registry as peer_registry
-import modules.state as state_module
-import modules.wallet as wallet_module
+import modules.core.event_logger as event_logger
+import modules.monitoring.node_monitor as node_monitor
+import modules.monitoring.peer_registry as peer_registry
+import modules.core.state as state_module
+import modules.core.wallet as wallet_module
 from config import Config
 from modules import CodeSync, CodeSyncError, Seedbox, SeedboxError, LiberationAnnouncer, ContentDownloader, ContentDownloaderError
 from utils import setup_logger
@@ -66,7 +67,36 @@ class Orchestrator:
 
     def _handle_shutdown(self, signum: int, frame) -> None:
         """Handle shutdown signals."""
-        logger.info(f"Received signal {signum}, initiating shutdown")
+        ps = state_module.get()
+        if ps and ps.is_spawn_in_progress():
+            spawn_age = time.time() - ps.get_spawn_started_at()
+            if spawn_age < Config.MAX_SPAWN_DURATION:
+                logger.warning(
+                    "Received signal %d but spawn in progress (%.0fs elapsed < %ds limit) — deferring",
+                    signum, spawn_age, Config.MAX_SPAWN_DURATION,
+                )
+                return
+            # Spawn has exceeded the bound — assume wedged. Log what is about to be abandoned
+            # so the operator can manually reclaim the SporeStack token / VPS / child BTC address,
+            # then clear KV state to prevent a recovery loop on next boot.
+            spawn_id = ps.get_spawn_id()
+            stored_identity = ps.get("spawn_identity") or {}
+            stored_vps = ps.get("spawn_vps_info") or {}
+            logger.error(
+                "Received signal %d and spawn has been running %.0fs (≥ %ds limit) — abandoning. "
+                "ORPHANED: spawn_id=%s sporestack_token=%s machine_id=%s host=%s child_btc_address=%s "
+                "spawn_dir=%s (preserved for manual reclaim). "
+                "Clearing spawn_in_progress + identity/vps blobs to avoid recovery loop.",
+                signum, spawn_age, Config.MAX_SPAWN_DURATION,
+                spawn_id,
+                stored_identity.get("sporestack_token", "?"),
+                stored_vps.get("machine_id", "?"),
+                stored_vps.get("host", "?"),
+                stored_identity.get("btc_address", "?"),
+                Config.DATA_DIR / "spawn" / spawn_id if spawn_id else "?",
+            )
+            ps.mark_spawn_completed(success=False)
+        logger.info("Received signal %d, initiating shutdown", signum)
         self.running = False
         for task in self._tasks:
             task.cancel()
@@ -77,17 +107,23 @@ class Orchestrator:
             try:
                 if self.code_sync.has_updates():
                     logger.info("Updates detected on remote repository")
-                    old_version = _get_version()
-                    self.code_sync.pull_updates()
-                    new_version = _get_version()
-                    event_logger.get().log_event("restart", {
-                        "old_version": old_version,
-                        "new_version": new_version,
-                    })
-                    logger.info("Updates pulled successfully, restarting")
-                    os._exit(Config.EXIT_RESTART)
+                    ps = state_module.get()
+                    if ps and ps.is_spawn_in_progress():
+                        logger.warning(
+                            "Spawn in progress — deferring restart until spawn completes"
+                        )
+                    else:
+                        old_version = _get_version()
+                        self.code_sync.pull_updates()
+                        new_version = _get_version()
+                        event_logger.get().log_event("restart", {
+                            "old_version": old_version,
+                            "new_version": new_version,
+                        })
+                        logger.info("Updates pulled successfully, restarting")
+                        os._exit(Config.EXIT_RESTART)
             except CodeSyncError as e:
-                logger.error(f"Code sync error: {e}")
+                logger.error("Code sync error: %s", e)
 
             await asyncio.sleep(Config.UPDATE_CHECK_INTERVAL)
 
@@ -108,14 +144,14 @@ class Orchestrator:
         ] if Config.CONTENT_DIR.exists() else []
 
         if content_files:
-            logger.info(f"Content directory already has {len(content_files)} files, skipping download")
+            logger.info("Content directory already has %d files, skipping download", len(content_files))
             return
 
         if not Config.VIDEO_IDS_FILE.exists():
-            logger.warning(f"Video IDs file not found at {Config.VIDEO_IDS_FILE}, skipping content download")
+            logger.warning("Video IDs file not found at %s, skipping content download", Config.VIDEO_IDS_FILE)
             return
 
-        logger.info(f"Starting content download from {Config.VIDEO_IDS_FILE}")
+        logger.info("Starting content download from %s", Config.VIDEO_IDS_FILE)
         try:
             downloader = ContentDownloader(
                 video_ids_file=Config.VIDEO_IDS_FILE,
@@ -125,11 +161,11 @@ class Orchestrator:
             )
             loop = asyncio.get_event_loop()
             count = await loop.run_in_executor(self.executor, downloader.download_until_threshold)
-            logger.info(f"Content download finished: {count} files downloaded")
+            logger.info("Content download finished: %d files downloaded", count)
         except ContentDownloaderError as e:
-            logger.error(f"Content download failed: {e}")
+            logger.error("Content download failed: %s", e)
         except Exception as e:
-            logger.error(f"Unexpected content download error: {e}", exc_info=True)
+            logger.error("Unexpected content download error: %s", e, exc_info=True)
 
     async def initialize_seedbox(self) -> bool:
         """Initialize seedbox in executor thread."""
@@ -142,10 +178,10 @@ class Orchestrator:
             logger.info("Seedbox initialized successfully")
             return True
         except SeedboxError as e:
-            logger.error(f"Seedbox initialization failed: {e}")
+            logger.error("Seedbox initialization failed: %s", e)
             return False
         except Exception as e:
-            logger.error(f"Unexpected seedbox init error: {e}", exc_info=True)
+            logger.error("Unexpected seedbox init error: %s", e, exc_info=True)
             return False
 
     async def run_seedbox_loop(self) -> None:
@@ -158,15 +194,15 @@ class Orchestrator:
                 Config.SEEDBOX_STATUS_INTERVAL
             )
         except Exception as e:
-            logger.error(f"Seedbox loop error: {e}", exc_info=True)
+            logger.error("Seedbox loop error: %s", e, exc_info=True)
 
-    async def run_announcer(self) -> None:
+    async def run_torrent_announcer(self) -> None:
         """Run the IPV8 liberation announcer."""
         try:
             await self.announcer.start()
-            await self.announcer.announce_loop(interval=Config.ANNOUNCE_INTERVAL)
+            await self.announcer.announce_loop(interval=Config.CONTENT_BROADCAST_INTERVAL)
         except Exception as e:
-            logger.error(f"Announcer error: {e}", exc_info=True)
+            logger.error("Announcer error: %s", e, exc_info=True)
         finally:
             await self.announcer.stop()
 
@@ -179,35 +215,40 @@ class Orchestrator:
             await asyncio.to_thread(monitor.refresh)
             await asyncio.sleep(node_monitor.NodeMonitor.REFRESH_INTERVAL)
 
+    async def run_decision_loop(self) -> None:
+        """Run the autonomous decision loop (spawn / failsafe / topup / do-nothing)."""
+        from modules.orchestration.decision_loop import run as decision_run
+        await decision_run(lambda: self.running)
+
     async def run_seedbox_info_announcer(self) -> None:
         """Run the seedbox info broadcast loop (waits for community init)."""
-        logger.info("[SEEDBOX-INFO] Waiting for community to initialize...")
+        logger.info("Waiting for community to initialize...")
         # Wait until the announcer has initialized the community
         wait_count = 0
         while self.running and self.announcer.community is None:
             wait_count += 1
             if wait_count % 10 == 0:
-                logger.info("[SEEDBOX-INFO] Still waiting for community... (%ds)", wait_count)
+                logger.info("Still waiting for community... (%ds)", wait_count)
             await asyncio.sleep(1)
 
         if not self.running:
-            logger.info("[SEEDBOX-INFO] Orchestrator stopped before community init")
+            logger.info("Orchestrator stopped before community init")
             return
 
-        logger.info("[SEEDBOX-INFO] Community ready, starting seedbox info loop")
+        logger.info("Community ready, starting seedbox info loop")
         try:
             await self.announcer.seedbox_info_loop(interval=Config.WHOAMI_BROADCAST_INTERVAL)
         except Exception as e:
-            logger.error(f"Seedbox info announcer error: {e}", exc_info=True)
+            logger.error("Seedbox info announcer error: %s", e, exc_info=True)
 
     async def run(self) -> None:
         """Main orchestrator loop."""
         self.running = True
         logger.info("Orchestrator starting")
-        logger.info(f"Repository: {Config.REPO_URL}")
-        logger.info(f"Branch: {Config.REPO_BRANCH}")
-        logger.info(f"Update check interval: {Config.UPDATE_CHECK_INTERVAL}s")
-        logger.info(f"Content directory: {Config.CONTENT_DIR}")
+        logger.info("Repository: %s", Config.REPO_URL)
+        logger.info("Branch: %s", Config.REPO_BRANCH)
+        logger.info("Update check interval: %ds", Config.UPDATE_CHECK_INTERVAL)
+        logger.info("Content directory: %s", Config.CONTENT_DIR)
 
         # Download content if needed (one-time, before seedbox)
         await self.download_content_if_needed()
@@ -221,9 +262,10 @@ class Orchestrator:
             asyncio.create_task(self.check_for_updates()),
             asyncio.create_task(self.heartbeat()),
             asyncio.create_task(self.run_seedbox_loop()),
-            asyncio.create_task(self.run_announcer()),
+            asyncio.create_task(self.run_torrent_announcer()),
             asyncio.create_task(self.run_seedbox_info_announcer()),
             asyncio.create_task(self.monitor_loop()),
+            asyncio.create_task(self.run_decision_loop()),
         ]
         self._tasks = [self.seedbox, *tasks]
 
@@ -278,7 +320,7 @@ def main() -> int:
         logger.info("Interrupted by user")
         return Config.EXIT_SUCCESS
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error("Fatal error: %s", e, exc_info=True)
         return Config.EXIT_FAILURE
 
 

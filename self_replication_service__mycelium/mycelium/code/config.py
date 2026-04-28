@@ -1,6 +1,4 @@
 """
-Configuration management for the autonomous orchestrator.
-
 All configuration values are sourced from environment variables.
 """
 
@@ -20,7 +18,7 @@ class Config:
 
     # Timing
     UPDATE_CHECK_INTERVAL: int = int(os.getenv("MYCELIUM_UPDATE_INTERVAL", "60"))
-    HEARTBEAT_INTERVAL: int = int(os.getenv("MYCELIUM_HEARTBEAT_INTERVAL", "60"))
+    HEARTBEAT_INTERVAL: int = int(os.getenv("MYCELIUM_HEARTBEAT_INTERVAL", "300"))
 
     # Paths
     BASE_DIR: Path = Path(os.getenv("MYCELIUM_BASE_DIR", "/root/mycelium"))
@@ -29,7 +27,7 @@ class Config:
     CONTENT_DIR: Path = Path(os.getenv("MYCELIUM_CONTENT_DIR", "/root/music"))
     VIDEO_IDS_FILE: Path = Path(os.getenv("MYCELIUM_VIDEO_IDS_FILE", "/root/cc_video_ids.txt"))
     COOKIES_FILE: Path = Path(os.getenv("MYCELIUM_COOKIES_FILE", "/root/yt_cookies.txt"))
-    DISK_THRESHOLD: int = int(os.getenv("MYCELIUM_DISK_THRESHOLD", "20"))
+    DISK_THRESHOLD: int = int(os.getenv("MYCELIUM_DISK_THRESHOLD", "10"))
 
     # Node identity
     FRIENDLY_NAME: str = os.getenv("MYCELIUM_FRIENDLY_NAME", "mycelium-node")
@@ -43,8 +41,8 @@ class Config:
     # IPV8 / Fleet
     WHOAMI_BROADCAST_INTERVAL: int = int(os.getenv("MYCELIUM_WHOAMI_BROADCAST_INTERVAL", "60"))
     WHOAMI_GOSSIP_COOLDOWN: int = int(os.getenv("MYCELIUM_WHOAMI_GOSSIP_COOLDOWN", "60"))
-    ANNOUNCE_INTERVAL: int = int(os.getenv("MYCELIUM_ANNOUNCE_INTERVAL", "60"))
     PEER_REGISTRY_TTL: int = int(os.getenv("MYCELIUM_PEER_REGISTRY_TTL", "3600"))
+    CONTENT_BROADCAST_INTERVAL: int = int(os.getenv("MYCELIUM_CONTENT_BROADCAST_INTERVAL", str(5 * 3600)))
 
     # Seedbox configuration
     TORRENT_TRACKER: str = os.getenv(
@@ -63,6 +61,7 @@ class Config:
     BITCOIN_WALLET_NAME: str = os.getenv("MYCELIUM_BITCOIN_WALLET", "mycelium_wallet")
     BTC_MNEMONIC: str = os.getenv("MYCELIUM_BTC_MNEMONIC", "")
     BITCOIN_NETWORK: str = os.getenv("MYCELIUM_BITCOIN_NETWORK", "bitcoin")  # mainnet
+    DEFAULT_BTC_ADDRESS: str = os.getenv("MYCELIUM_DEFAULT_BTC_ADDRESS", "")
 
     # Persistent state
     STATE_DB_FILE: Path = DATA_DIR / "state.db"
@@ -78,8 +77,29 @@ class Config:
     SPAWN_RESERVE_DAYS: int    = int(os.getenv("MYCELIUM_SPAWN_RESERVE_DAYS", "30"))
     INHERITANCE_RATIO: float   = float(os.getenv("MYCELIUM_INHERITANCE_RATIO", "0.4"))
 
+    # Decision loop
+    DECISION_INTERVAL: int     = int(os.getenv("MYCELIUM_DECISION_INTERVAL", "21600")) #6h
+    FAILSAFE_TRIGGER_DAYS: int = int(os.getenv("MYCELIUM_FAILSAFE_TRIGGER_DAYS", "2"))
+    TOPUP_TRIGGER_DAYS: int    = int(os.getenv("MYCELIUM_TOPUP_TRIGGER_DAYS", "30"))
+    TOPUP_TARGET_DAYS: int     = int(os.getenv("MYCELIUM_TOPUP_TARGET_DAYS", "30"))
+
+    # Max seconds the shutdown handler will defer a signal while a spawn is in progress.
+    # After this, SIGTERM/SIGINT is honoured so the operator can kill a wedged spawn
+    # without SIGKILL (which would leave spawn_in_progress=True and re-trigger recovery).
+    MAX_SPAWN_DURATION: int = int(os.getenv("MYCELIUM_MAX_SPAWN_DURATION", str(2 * 3600)))  # 2h
+
     # SporeStack / VPS identity
     SPORESTACK_TOKEN_FILE: Path = DATA_DIR / "sporestack_token"
+
+    # SporeStack / VPS provisioning defaults (injected by deployer; mirror mycelium-bootstrap/config.json)
+    VPS_PROVIDER: str      = os.getenv("MYCELIUM_VPS_PROVIDER", "sporestack_eu")
+    VPS_FLAVOR: str        = os.getenv("MYCELIUM_VPS_FLAVOR", "sporestack-eu-4gb")
+    VPS_REGION: str        = os.getenv("MYCELIUM_VPS_REGION", "amsterdam")
+    VPS_OS: str            = os.getenv("MYCELIUM_VPS_OS", "ubuntu-24.04")
+    VPS_DAYS: int          = int(os.getenv("MYCELIUM_VPS_DAYS", "30"))
+    VPS_BILLING_CYCLE: str = os.getenv("MYCELIUM_VPS_BILLING_CYCLE", "monthly")
+    # Fallback monthly VPS cost in cents. Used when SporeStack's /server/quote is still not available.
+    VPS_MONTHLY_COST_CENTS: int = int(os.getenv("MYCELIUM_VPS_MONTHLY_COST_CENTS", "3000"))
 
     # Exit codes
     EXIT_SUCCESS: int = 0
