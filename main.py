@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import atexit
+import json
+import logging.config
+import pathlib
 import sys
+from logging.handlers import QueueHandler
 from pathlib import Path
 from typing import Optional
 
@@ -22,10 +27,43 @@ from healthchecker.health_thread import TorrentHealthThread
 from ui.app import Application
 from ui.common.fonts import load_application_fonts
 
+
+def setup_logging() -> None:
+    config_file = pathlib.Path(__file__).parent / "logging_config.json"
+
+    with open(config_file, "r", encoding="utf-8") as f:
+        logging_config = json.load(f)
+
+    logging.config.dictConfig(logging_config)
+
+    queue_listeners = []
+
+    for handler_name in logging_config.get("handlers", {}):
+        handler = logging.getHandlerByName(handler_name)
+
+        if isinstance(handler, QueueHandler):
+            listener = getattr(handler, "listener", None)
+
+            if listener is not None:
+                listener.start()
+                queue_listeners.append(listener)
+
+    if queue_listeners:
+        atexit.register(_stop_queue_listeners, queue_listeners)
+
+
+def _stop_queue_listeners(queue_listeners: list) -> None:
+    for listener in queue_listeners:
+        listener.stop()
+
+
 # -----------------------------
 # App entrypoint
 # -----------------------------
 def main() -> None:
+    # --- Logging ---
+    setup_logging()
+
     # --- Session user ---
     user = Person()  # Person generates a random ID by default
 
@@ -35,13 +73,13 @@ def main() -> None:
     issue_store = JSONStore[Issue](
         path=base_path / "issues.json",
         model_factory=Issue.from_dict,
-        dictify=lambda i: i.to_dict()
+        dictify=lambda i: i.to_dict(),
     )
 
     solution_store = JSONStore[Solution](
         path=base_path / "solutions.json",
         model_factory=Solution.from_dict,
-        dictify=lambda s: s.to_dict()
+        dictify=lambda s: s.to_dict(),
     )
 
     issue_vote_store = JSONStore[IssueVote](
@@ -62,7 +100,9 @@ def main() -> None:
 
     # --- Torrent health ---
     init_db()
-    KEY_FILE = str(Path(__file__).parent / "torrent_health_and_investment" / "liberation_key.pem")
+    KEY_FILE = str(
+        Path(__file__).parent / "torrent_health_and_investment" / "liberation_key.pem"
+    )
     health_thread = TorrentHealthThread(key_file=KEY_FILE)
     health_thread.error.connect(lambda msg: print("Health error:", msg))
     health_thread.startedOk.connect(lambda: print("Health thread started"))
@@ -96,14 +136,22 @@ def main() -> None:
         broadcast_new_issue_vote,
         broadcast_new_solution,
         broadcast_new_solution_vote,
-        health_thread
+        health_thread,
     )
 
     # Start IPv8 in QThread
-    worker = IPv8Thread(user.id, issue_store, issue_vote_store, solution_store, solution_vote_store)
-    worker.dataChanged.connect(window.schedule_refresh, type=Qt.ConnectionType.QueuedConnection)
-    worker.error.connect(lambda msg: print("IPv8 error:", msg), type=Qt.ConnectionType.QueuedConnection)
-    worker.startedOk.connect(lambda: print("IPv8 started"), type=Qt.ConnectionType.QueuedConnection)
+    worker = IPv8Thread(
+        user.id, issue_store, issue_vote_store, solution_store, solution_vote_store
+    )
+    worker.dataChanged.connect(
+        window.schedule_refresh, type=Qt.ConnectionType.QueuedConnection
+    )
+    worker.error.connect(
+        lambda msg: print("IPv8 error:", msg), type=Qt.ConnectionType.QueuedConnection
+    )
+    worker.startedOk.connect(
+        lambda: print("IPv8 started"), type=Qt.ConnectionType.QueuedConnection
+    )
     worker.start()
 
     # --- Run UI ---
@@ -117,6 +165,7 @@ def main() -> None:
         if worker is not None:
             worker.stop()
             worker.wait(1000)
+
 
 if __name__ == "__main__":
     main()

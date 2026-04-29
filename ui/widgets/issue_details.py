@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
 
 from democracy.models.DTOs.issue_with_votes import IssueWithVotes
 from democracy.models.DTOs.solution_with_votes import SolutionWithVotes
+
+logger = logging.getLogger(f"superorganism.{__name__}")
 
 
 class VotePanel(QFrame):
@@ -54,7 +57,9 @@ class SolutionCard(QFrame):
     voted = Signal(object)
     details_requested = Signal(object)
 
-    def __init__(self, solution_with_votes: SolutionWithVotes, parent: QWidget | None = None):
+    def __init__(
+        self, solution_with_votes: SolutionWithVotes, parent: QWidget | None = None
+    ):
         super().__init__(parent)
 
         self.solution_with_votes = solution_with_votes
@@ -203,14 +208,15 @@ class IssueDetailWidget(QWidget):
         self.status_badge = QLabel("OPEN")
         self.status_badge.setProperty("role", "status-badge")
         self.status_badge.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         self.status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.issue_id_lbl = QLabel("")
         self.issue_id_lbl.setProperty("role", "issue-id")
-        self.issue_id_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.issue_id_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         self.meta_row.addWidget(self.status_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         self.meta_row.addWidget(self.issue_id_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -219,7 +225,9 @@ class IssueDetailWidget(QWidget):
         self.title_lbl = QLabel("")
         self.title_lbl.setProperty("role", "issue-title")
         self.title_lbl.setWordWrap(True)
-        self.title_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.title_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         self.title_meta_row = QHBoxLayout()
         self.title_meta_row.setContentsMargins(0, 0, 0, 0)
@@ -257,8 +265,12 @@ class IssueDetailWidget(QWidget):
         self.desc_lbl = QLabel("")
         self.desc_lbl.setProperty("role", "issue-description")
         self.desc_lbl.setWordWrap(True)
-        self.desc_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.desc_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.desc_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.desc_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
 
         self.approve_btn = QPushButton("Approve Issue")
         self.approve_btn.setProperty("variant", "primary-accent")
@@ -288,9 +300,13 @@ class IssueDetailWidget(QWidget):
 
         solutions_header.addWidget(solutions_title, 0, Qt.AlignmentFlag.AlignVCenter)
         solutions_header.addSpacing(8)
-        solutions_header.addWidget(self.solutions_count_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        solutions_header.addWidget(
+            self.solutions_count_lbl, 0, Qt.AlignmentFlag.AlignVCenter
+        )
         solutions_header.addStretch()
-        solutions_header.addWidget(self.add_solution_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        solutions_header.addWidget(
+            self.add_solution_btn, 0, Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.solutions_layout = QVBoxLayout()
         self.solutions_layout.setContentsMargins(0, 0, 0, 0)
@@ -407,7 +423,7 @@ class IssueDetailWidget(QWidget):
         if self._current_issue is None:
             return
 
-        print(f"Creator clicked: {self._current_issue.issue.creator_id}")
+        logger.info(f"Creator clicked: {self._current_issue.issue.creator_id}")
 
     def _open_create_solution(self) -> None:
         if self.current_issue_id is not None:

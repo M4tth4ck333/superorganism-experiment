@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "standard": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    }
+  },
+  "handlers": {
+    "file": {
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "DEBUG",
+      "formatter": "standard",
+      "filename": "logs/app.log",
+      "maxBytes": 10000000,
+      "backupCount": 3
+    },
+    "console": {
+      "class": "logging.StreamHandler",
+      "level": "DEBUG",
+      "formatter": "standard",
+      "stream": "ext://sys.stdout"
+    },
+    "file_queue_handler": {
+      "class": "logging.handlers.QueueHandler",
+      "handlers": ["file"],
+      "respect_handler_level": true
+    },
+    "console_queue_handler": {
+      "class": "logging.handlers.QueueHandler",
+      "handlers": ["console"],
+      "respect_handler_level": true
+    }
+  },
+  "root": {
+    "level": "DEBUG",
+    "handlers": ["file_queue_handler"]
+  },
+  "loggers": {
+    "superorganism.democracy": {
+      "level": "DEBUG",
+      "handlers": ["console_queue_handler"],
+      "propagate": true
+    }
+  }
+}
