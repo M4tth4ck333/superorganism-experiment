@@ -34,6 +34,8 @@ def setup_logging() -> None:
     with open(config_file, "r", encoding="utf-8") as f:
         logging_config = json.load(f)
 
+    _ensure_log_directories_exist(logging_config, base_dir=config_file.parent)
+
     logging.config.dictConfig(logging_config)
 
     queue_listeners = []
@@ -50,6 +52,35 @@ def setup_logging() -> None:
 
     if queue_listeners:
         atexit.register(_stop_queue_listeners, queue_listeners)
+
+
+def _ensure_log_directories_exist(logging_config: dict, base_dir: pathlib.Path) -> None:
+    """
+    Create parent directories for all file-based logging handlers.
+
+    Relative log file paths are resolved relative to the logging config file. The log file
+    itself does not need to be created manually; the file handler creates it when logging
+    starts.
+
+    :param logging_config: The logging configuration dictionary.
+    :param base_dir: The directory relative paths should be resolved against.
+    :returns: None.
+    """
+    handlers = logging_config.get("handlers", {})
+
+    for handler_config in handlers.values():
+        filename = handler_config.get("filename")
+
+        if filename is None:
+            continue
+
+        log_file = pathlib.Path(filename)
+
+        if not log_file.is_absolute():
+            log_file = base_dir / log_file
+            handler_config["filename"] = str(log_file)
+
+        log_file.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _stop_queue_listeners(queue_listeners: list) -> None:
