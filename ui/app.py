@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-
+import logging
 from uuid import UUID
 from typing import TYPE_CHECKING, Callable, Optional
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QHBoxLayout,
-    QStackedWidget
-)
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget
 
 from config import UI_REFRESH_DELAY
 from democracy.models.issue import Issue
@@ -37,6 +32,8 @@ from crowdsourced_learn_to_rank.ltr_community_thread import LTRCommunityThread
 if TYPE_CHECKING:
     from healthchecker.health_thread import TorrentHealthThread
 
+logger = logging.getLogger(f"superorganism.{__name__}")
+
 
 class Application(QMainWindow):
     """
@@ -53,6 +50,7 @@ class Application(QMainWindow):
         issue_store (JSONStore[Issue]): Store for issues.
         issue_vote_store (JSONStore[Vote]): Store for votes.
     """
+
     def __init__(
         self,
         user: Person,
@@ -76,7 +74,9 @@ class Application(QMainWindow):
         self.solution_store = solution_store
         self.solution_vote_store = solution_vote_store
 
-        self.repo = DemocracyRepository(issue_store, issue_vote_store, solution_store, solution_vote_store)
+        self.repo = DemocracyRepository(
+            issue_store, issue_vote_store, solution_store, solution_vote_store
+        )
 
         self.broadcast_new_issue = broadcast_new_issue
         self.broadcast_new_issue_vote = broadcast_new_issue_vote
@@ -120,15 +120,23 @@ class Application(QMainWindow):
         self.issue_detail_page.back_clicked.connect(self._show_issues_page)
         self.issue_detail_page.approved.connect(self._on_vote)
         self.issue_detail_page.solution_voted.connect(self._on_solution_vote)
-        self.issue_detail_page.solution_details_requested.connect(self._on_solution_details)
-        self.issue_detail_page.open_create_solution.connect(self._open_create_solution_overlay)
+        self.issue_detail_page.solution_details_requested.connect(
+            self._on_solution_details
+        )
+        self.issue_detail_page.open_create_solution.connect(
+            self._open_create_solution_overlay
+        )
 
         self._solution_target_issue_id: Optional[UUID] = None
 
         self.solution_detail_page = SolutionDetailWidget()
-        self.solution_detail_page.back_clicked.connect(self._show_issue_detail_page_for_current_issue)
+        self.solution_detail_page.back_clicked.connect(
+            self._show_issue_detail_page_for_current_issue
+        )
         self.solution_detail_page.voted.connect(self._on_vote_solution_directly)
-        self.solution_detail_page.code_verification_clicked.connect(self._on_code_verification_clicked)
+        self.solution_detail_page.code_verification_clicked.connect(
+            self._on_code_verification_clicked
+        )
 
         self.torrents_page = TorrentsWidget()
         self.fleet_page = FleetWidget()
@@ -153,10 +161,12 @@ class Application(QMainWindow):
         self.sidebar.torrents_clicked.connect(self._show_torrents_page)
         self.sidebar.fleet_clicked.connect(self._show_fleet_page)
         self.sidebar.issues_clicked.connect(self._show_issues_page)
-        self.sidebar.my_issues_clicked.connect(lambda: print("My Issues clicked"))
-        self.sidebar.voting_history_clicked.connect(lambda: print("Voting History clicked"))
+        self.sidebar.my_issues_clicked.connect(lambda: logger.info("My Issues clicked"))
+        self.sidebar.voting_history_clicked.connect(
+            lambda: logger.info("Voting History clicked")
+        )
         self.sidebar.experiment_clicked.connect(self._show_experiment_page)
-        self.sidebar.settings_clicked.connect(lambda: print("Settings clicked"))
+        self.sidebar.settings_clicked.connect(lambda: logger.info("Settings clicked"))
         self.sidebar.create_clicked.connect(self._open_create_overlay)
 
         health_thread.dataChanged.connect(
@@ -270,7 +280,7 @@ class Application(QMainWindow):
         :return: None
         """
         if self.repo.has_user_voted_for_issue(self.user.id, issue_id):
-            return # already voted
+            return  # already voted
 
         vote = IssueVote(
             voter_id=self.user.id,
@@ -358,7 +368,7 @@ class Application(QMainWindow):
             self._on_solution_vote(current_issue_id, solution_id)
 
     def _on_code_verification_clicked(self, solution_id: UUID) -> None:
-        print(f"Open code verification for solution {solution_id}")
+        logger.info(f"Open code verification for solution {solution_id}")
 
     def _show_torrents_page(self) -> None:
         self._set_active_nav("torrents")

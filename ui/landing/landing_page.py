@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
@@ -31,6 +33,8 @@ from ui.constants import JOIN_MESH_EXPECTED_FEE_SATS, TREASURY_ADDRESS, WHITEPAP
 from ui.landing.join_mesh_overlay import JoinMeshOverlay
 from ui.landing.login_overlay import LoginOverlay
 
+logger = logging.getLogger(f"superorganism.{__name__}")
+
 
 class LandingNavBar(QWidget):
     join_requested = Signal()
@@ -51,7 +55,9 @@ class LandingNavBar(QWidget):
         self.sign_in_btn = QPushButton("Sign In")
         self.sign_in_btn.setProperty("variant", "landing-nav-link")
         self.sign_in_btn.setFixedHeight(40)
-        self.sign_in_btn.clicked.connect(lambda _checked=False: self.sign_in_requested.emit())
+        self.sign_in_btn.clicked.connect(
+            lambda _checked=False: self.sign_in_requested.emit()
+        )
 
         self.join_btn = QPushButton("Join Mesh")
         self.join_btn.setObjectName("navJoinButton")
@@ -90,7 +96,9 @@ class HeroSection(QFrame):
         self.text_block = QWidget()
         self.text_block.setObjectName("heroTextBlock")
         self.text_block.setMaximumWidth(980)
-        self.text_block.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.text_block.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+        )
 
         text_block_layout = QVBoxLayout(self.text_block)
         text_block_layout.setContentsMargins(0, 0, 0, 0)
@@ -100,19 +108,19 @@ class HeroSection(QFrame):
         self.kicker_lbl.setObjectName("heroKicker")
         self.kicker_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.title_lbl = QLabel(
-            """
+        self.title_lbl = QLabel("""
             <p align="center" style="line-height: 0.85; margin: 0;">
                 The World's First<br>
                 <span style="color:#b6a0ff;">Autonomous<br>Seedbox.</span>
             </p>
-            """
-        )
+            """)
         self.title_lbl.setObjectName("heroTitle")
         self.title_lbl.setTextFormat(Qt.TextFormat.RichText)
         self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_lbl.setWordWrap(False)
-        self.title_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.title_lbl.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         self.subtitle_lbl = QLabel(
             "Decentralized, democratic, and indestructible. "
@@ -121,7 +129,9 @@ class HeroSection(QFrame):
         self.subtitle_lbl.setObjectName("heroSubtitle")
         self.subtitle_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.subtitle_lbl.setWordWrap(True)
-        self.subtitle_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.subtitle_lbl.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         text_block_layout.addWidget(self.kicker_lbl)
         text_block_layout.addWidget(self.title_lbl)
@@ -145,7 +155,9 @@ class HeroSection(QFrame):
         self.whitepaper_btn.setIcon(icon("arrow-up-right"))
         self.whitepaper_btn.setIconSize(icon_size(18))
         self.whitepaper_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.whitepaper_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(WHITEPAPER_URL)))
+        self.whitepaper_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(WHITEPAPER_URL))
+        )
 
         button_row.addWidget(self.join_btn)
         button_row.addWidget(self.whitepaper_btn)
@@ -191,7 +203,13 @@ class HeroSection(QFrame):
 
 
 class SectionHeader(QWidget):
-    def __init__(self, title: str, accent: bool = False, label: str | None = None, parent: QWidget | None = None):
+    def __init__(
+        self,
+        title: str,
+        accent: bool = False,
+        label: str | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
@@ -297,13 +315,21 @@ class PricingCard(QFrame):
         layout.addStretch()
 
         self.button = QPushButton(button_text)
-        self.button.setProperty("variant", "landing-primary" if highlighted else "landing-plan")
-        self.button.clicked.connect(lambda: print(f"{plan_name} selected"))
+        self.button.setProperty(
+            "variant", "landing-primary" if highlighted else "landing-plan"
+        )
+        self.button.clicked.connect(lambda: logger.info(f"{plan_name} selected"))
         layout.addWidget(self.button)
 
 
 class FaqItem(QFrame):
-    def __init__(self, question: str, answer: str, expanded: bool = False, parent: QWidget | None = None):
+    def __init__(
+        self,
+        question: str,
+        answer: str,
+        expanded: bool = False,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.setProperty("variant", "faq-item")
 
@@ -367,7 +393,7 @@ class FooterSection(QFrame):
         ]:
             btn = QPushButton(text)
             btn.setProperty("variant", "footer-link")
-            btn.clicked.connect(lambda _=False, t=text: print(f"{t} clicked"))
+            btn.clicked.connect(lambda _=False, t=text: logger.info(f"{t} clicked"))
             links_layout.addWidget(btn)
 
         rights = QLabel("© 2024 SEEDVAULT DECENTRALIZED PROTOCOL. ALL RIGHTS RESERVED.")
@@ -382,7 +408,9 @@ class FooterSection(QFrame):
 
 
 class LandingPageWidget(QWidget):
-    _LOGIN_COMMITMENT_PLACEHOLDER = "Enter or load a public key to create a login challenge."
+    _LOGIN_COMMITMENT_PLACEHOLDER = (
+        "Enter or load a public key to create a login challenge."
+    )
 
     def __init__(
         self,
@@ -429,7 +457,9 @@ class LandingPageWidget(QWidget):
         self.nav.sign_in_requested.connect(self._open_login_overlay)
         self.nav.raise_()
 
-        self.hero = HeroSection(image_path=hero_image_path or ":/images/landing_page.png")
+        self.hero = HeroSection(
+            image_path=hero_image_path or ":/images/landing_page.png"
+        )
         self.hero.join_requested.connect(self._open_join_mesh_overlay)
 
         content_layout.addWidget(self.hero)
@@ -555,8 +585,12 @@ class LandingPageWidget(QWidget):
     def _open_login_overlay(self) -> None:
         if self.login_overlay is None:
             self.login_overlay = LoginOverlay(parent=self)
-            self.login_overlay.public_key_committed.connect(self._refresh_login_challenge)
-            self.login_overlay.load_saved_login_requested.connect(self._load_saved_login)
+            self.login_overlay.public_key_committed.connect(
+                self._refresh_login_challenge
+            )
+            self.login_overlay.load_saved_login_requested.connect(
+                self._load_saved_login
+            )
             self.login_overlay.sign_now_requested.connect(self._sign_message)
             self.login_overlay.login_requested.connect(self._handle_login_request)
 
@@ -579,7 +613,9 @@ class LandingPageWidget(QWidget):
             return
 
         try:
-            challenge = self._authentication_service.create_challenge_message(normalized_public_key_hex)
+            challenge = self._authentication_service.create_challenge_message(
+                normalized_public_key_hex
+            )
         except ValueError:
             self.login_overlay.set_commitment(self._LOGIN_COMMITMENT_PLACEHOLDER)
             return
@@ -600,9 +636,7 @@ class LandingPageWidget(QWidget):
             )
             return
 
-        stored_registration = self._registration_store.get(
-            normalized_public_key_hex
-        )
+        stored_registration = self._registration_store.get(normalized_public_key_hex)
         if stored_registration is None:
             QMessageBox.warning(
                 self,

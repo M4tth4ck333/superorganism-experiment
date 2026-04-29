@@ -1,3 +1,4 @@
+import logging
 from typing import Callable, Optional, Set, TypeVar
 
 from ipv8.community import Community, CommunitySettings
@@ -20,6 +21,9 @@ from democracy.storage.json_store import JSONStore
 TModel = TypeVar("TModel")
 TMsg = TypeVar("TMsg", bound=BaseMessage)
 
+logger = logging.getLogger(f"superorganism.{__name__}")
+
+
 class DemocracyCommunity(Community):
     """
     Community to manage and propagate issues and votes among peers.
@@ -30,6 +34,7 @@ class DemocracyCommunity(Community):
     Args:
         settings (CommunitySettings): Configuration for the community, including stores and callbacks.
     """
+
     community_id = COMMUNITY_ID
 
     def __init__(self, settings: CommunitySettings) -> None:
@@ -47,7 +52,9 @@ class DemocracyCommunity(Community):
         self.add_message_handler(SolutionMessage, self.on_solution_message)
         self.add_message_handler(SolutionVoteMessage, self.on_solution_vote_message)
 
-    def _multicast(self, payload: BaseMessage, skip_peers: Optional[Set[Peer]] = None) -> None:
+    def _multicast(
+        self, payload: BaseMessage, skip_peers: Optional[Set[Peer]] = None
+    ) -> None:
         """
         Multicasts a given message payload to all connected peers and skips the peers in skip_peers.
 
@@ -61,16 +68,22 @@ class DemocracyCommunity(Community):
         for peer in self.get_peers():
             if peer in skip_peers:
                 continue
-            print(f"{self.my_peer}: Broadcasting {payload.brief()} to peer {peer}.")
+            logger.debug(
+                f"{self.my_peer}: Broadcasting {payload.brief()} to peer {peer}."
+            )
             self.ez_send(peer, payload)
 
-    def _broadcast_store(self, store, to_message: Callable[[TModel], BaseMessage], label: str) -> None:
+    def _broadcast_store(
+        self, store, to_message: Callable[[TModel], BaseMessage], label: str
+    ) -> None:
         items = store.get_all()
 
         if not items:
             return
 
-        print(f"{self.my_peer}: Broadcasting {len(items)} {label} items to peers.")
+        logger.debug(
+            f"{self.my_peer}: Broadcasting {len(items)} {label} items to peers."
+        )
 
         for item in items:
             self._multicast(to_message(item))
@@ -81,6 +94,7 @@ class DemocracyCommunity(Community):
 
         :return: None
         """
+
         async def periodic_communication() -> None:
             """
             Periodically broadcasts all known issues and votes to connected peers.
@@ -88,39 +102,42 @@ class DemocracyCommunity(Community):
             :return: None
             """
             self._broadcast_store(
-                self.issue_store,
-                IssueMessage.from_model,
-                label="issues"
+                self.issue_store, IssueMessage.from_model, label="issues"
             )
 
             self._broadcast_store(
-                self.issue_vote_store,
-                IssueVoteMessage.from_model,
-                label="issue votes"
+                self.issue_vote_store, IssueVoteMessage.from_model, label="issue votes"
             )
-            
+
             self._broadcast_store(
-                self.solution_store,
-                SolutionMessage.from_model,
-                label="solutions"
+                self.solution_store, SolutionMessage.from_model, label="solutions"
             )
 
             self._broadcast_store(
                 self.solution_vote_store,
                 SolutionVoteMessage.from_model,
-                label="solution votes"
+                label="solution votes",
             )
 
         # We register an asyncio task with this overlay.
         # This makes sure that the task ends when this overlay is unloaded.
         # We call the "periodic_communication" function every minute, starting now.
-        self.register_task("start_communication", periodic_communication, interval=COMMUNICATION_INTERVAL, delay=0)
+        self.register_task(
+            "start_communication",
+            periodic_communication,
+            interval=COMMUNICATION_INTERVAL,
+            delay=0,
+        )
 
-    def _handle_incoming_message(self, peer: Peer, payload: TMsg, store, on_added: Callable[[], None]) -> None:
-        print(f"{self.my_peer}: Received {payload.brief()} from peer {peer}.")
+    def _handle_incoming_message(
+        self, peer: Peer, payload: TMsg, store, on_added: Callable[[], None]
+    ) -> None:
+        logger.debug(f"{self.my_peer}: Received {payload.brief()} from peer {peer}.")
 
         if store.get(payload.entity_id):
-            print(f"{self.my_peer}: Already knew about {payload.brief()}. Nothing updated.")
+            logger.debug(
+                f"{self.my_peer}: Already knew about {payload.brief()}. Nothing updated."
+            )
             return
 
         model = payload.to_model()
@@ -138,7 +155,9 @@ class DemocracyCommunity(Community):
         :param payload: Received issue message.
         :return: None
         """
-        self._handle_incoming_message(peer, payload, store=self.issue_store, on_added=self.data_changed)
+        self._handle_incoming_message(
+            peer, payload, store=self.issue_store, on_added=self.data_changed
+        )
 
     def on_create_issue(self, issue: Issue) -> None:
         """
@@ -158,7 +177,9 @@ class DemocracyCommunity(Community):
         :param payload: Received issue vote message.
         :return: None
         """
-        self._handle_incoming_message(peer, payload, store=self.issue_vote_store, on_added=self.data_changed)
+        self._handle_incoming_message(
+            peer, payload, store=self.issue_vote_store, on_added=self.data_changed
+        )
 
     def on_issue_vote(self, vote: IssueVote) -> None:
         """
@@ -178,7 +199,9 @@ class DemocracyCommunity(Community):
         :param payload: Received solution message.
         :return: None
         """
-        self._handle_incoming_message(peer, payload, store=self.solution_store, on_added=self.data_changed)
+        self._handle_incoming_message(
+            peer, payload, store=self.solution_store, on_added=self.data_changed
+        )
 
     def on_create_solution(self, solution: Solution) -> None:
         """
@@ -190,7 +213,9 @@ class DemocracyCommunity(Community):
         self._multicast(SolutionMessage.from_model(solution))
 
     @lazy_wrapper(SolutionVoteMessage)
-    def on_solution_vote_message(self, peer: Peer, payload: SolutionVoteMessage) -> None:
+    def on_solution_vote_message(
+        self, peer: Peer, payload: SolutionVoteMessage
+    ) -> None:
         """
         Handles incoming solution vote messages from peers. Adds unknown solution votes to the store and propagates them.
 
@@ -198,7 +223,9 @@ class DemocracyCommunity(Community):
         :param payload: Received solution vote message.
         :return: None
         """
-        self._handle_incoming_message(peer, payload, store=self.solution_vote_store, on_added=self.data_changed)
+        self._handle_incoming_message(
+            peer, payload, store=self.solution_vote_store, on_added=self.data_changed
+        )
 
     def on_solution_vote(self, vote: SolutionVote) -> None:
         """
