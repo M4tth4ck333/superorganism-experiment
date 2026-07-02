@@ -1,0 +1,11 @@
+numpy
+pandas
+scipy
+scikit-learn
+networkx
+matplotlib
+
+# TwiBot-22 at-scale pipeline only (large tweet-shard streaming + parquet):
+ijson
+pyarrow
+faiss-cpu

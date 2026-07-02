@@ -1,0 +1,14 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environments
+.venv/
+venv/
+
+# Intermediate and output artefacts (features, graphs, eval JSONs, figures)
+two_graph_fusion/cache/
+
+# OS
+.DS_Store
