@@ -22,8 +22,7 @@ Our superorganism is an _exploratory_ experiment for self-hosted and self-improv
 
 ## Technical documentation
 
-Superorganism is the joint work of professors, post-docs, phd students and master students (i.e. the ones doing the real work!).
-Algorithms and key components are documented in these documents.
+Superorganism is the joint work of professors, post-docs, phd students and master students (i.e. the ones doing the real work!) at Delft University of Technology and academic partners. Algorithms and key components are documented here.
 
 Algorithm | Superorganism algorithm extensive documentation
 ---|---
