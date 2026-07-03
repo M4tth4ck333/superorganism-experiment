@@ -2,7 +2,7 @@
 We are creating our own society. A place citizens have FULL control, have their own MONEY, have AI that serves THEM, and CONTROL together. Unstoppable by design, self-replicating, self-hosted, self-evolving, and human oversight with democratic governance. Well, that is our Utopian dream! It now runs and empowers a network of _seedboxes_.
 
 Our work contains several novelties: 
-- ⏩ Streaming Torrents. Quality streaming in P2P, competitive to Tiktok/Youtube/Netflix {warning: [still on seperate branch](https://github.com/Tribler/tribler/discussions/9003). Streaming GUI requires QT, decoder, Javascript bloat 🥹}.
+- ⏩ Streaming Torrents. Quality streaming in P2P, competitive to Tiktok/Youtube/Netflix {warning: [still on separate branch](https://github.com/Tribler/tribler/discussions/9003). Streaming GUI requires QT, decoder, Javascript bloat 🥹}.
 - 🪞 Self-replication. Servers that can buy other servers using Bitcoin. Fully automated cloning of servers.
 - ⚡ Trust. First trust framework and true Peer-to-Peer agent communication fabric. No DNS, no central control.
 - 🧑‍🚒 AI models in a real-time competition for survival of the fittest using multi-arm-bandit and model score gossip.
@@ -22,7 +22,7 @@ Our superorganism is an _exploratory_ experiment for self-hosted and self-improv
 
 ## Technical documentation
 
-Superorganism is the joint work of professors, post-docs, phd students and master students (e.g. the ones doing the real work!).
+Superorganism is the joint work of professors, post-docs, phd students and master students (i.e. the ones doing the real work!).
 Algorithms and key components are documented in these documents.
 
 Algorithm | Superorganism algorithm extensive documentation
@@ -71,14 +71,16 @@ pyside6-rcc ui/resources/resources.qrc -o ui/resources/resources_rc.py
 
 ## Decentralized trust
 
-A new graph-based trust algorithm is _not_ integrated into the prototype.  This is a Sybil detection reference implementation. The FuSST algorithm fuses a trust graph G_T (the platform follow or interaction graph) with a behavioural graph G_B (a mutual k-NN graph over five platform-agnostic behavioural features) and runs belief propagation (SybilSCAR and SybilHP variants) over the combined structure, optionally seeded with a logistic-regression prior. This [repository contains the complete code](https://github.com/Tribler/superorganism-experiment/tree/main/two_graph_fusion_public) to reproduce every table and figure in the [thesis](https://github.com/user-attachments/files/29458168/Master_Thesis___Towards_Solving_Sybil_Attacks_Using_Social_Capital_Accounting-4.pdf) across four labelled datasets (Cresci-2015, Cresci-2017, TwiBot-20, TwiBot-22) plus the Twitter-270k engine-validation benchmark.
+Our new graph-based trust algorithm is _not_ integrated into the prototype. This is a Sybil detection reference implementation. The FuSST algorithm fuses a trust graph G_T (the platform follow or interaction graph) with a behavioural graph G_B (a mutual k-NN graph over five platform-agnostic behavioural features) and runs belief propagation (SybilSCAR and SybilHP variants) over the combined structure, optionally seeded with a logistic-regression prior. This [repository contains the complete code](https://github.com/Tribler/superorganism-experiment/tree/main/two_graph_fusion_public) to reproduce every table and figure in the [thesis](https://github.com/user-attachments/files/29458168/Master_Thesis___Towards_Solving_Sybil_Attacks_Using_Social_Capital_Accounting-4.pdf) across four labelled datasets (Cresci-2015, Cresci-2017, TwiBot-20, TwiBot-22) plus the Twitter-270k engine-validation benchmark.
 
 ## Mycelium
 
-Autonomous VPS provisioning system using Bitcoin payments and SporeStack API. Deploys Mycelium a BitTorrent seedbox orchestrator for Creative Commons content. What it does:
-
+This is the self-replication part. Any server with a bitcoin wallet and our scripts can buy another server, clone itself, move money to clone, and then then clone can buy more servers. This has proven to be very difficult to move from lab prototype into production-level code. We have been working [since 2016](https://repository.tudelft.nl/record/uuid:a1b443c7-8b37-4263-ae96-d38bc8b8f397) on this. See our [2017](https://github.com/Tribler/tribler/issues/3238) running code:
+    ![purchase_vps](https://user-images.githubusercontent.com/3180670/35234058-305cd0be-ffa0-11e7-99fb-d7c3bb2dea79.gif)
+    
+Autonomous VPS provisioning system using Bitcoin payments and SporeStack API. Deploys [Mycelium a BitTorrent seedbox orchestrator](https://github.com/Tribler/superorganism-experiment/tree/main/self_replication_service__mycelium) for Creative Commons content. What it does:
 - Seeds content via BitTorrent (libtorrent)
-- Auto-updates from GitHub and restarts on changes
+- Auto-updates from central server GitHub (yes, we want self-hosting! Apply for phd position on this) and restarts on code changes
 - Broadcasts seeded content to IPV8 peers for health monitoring
 
 ## Local Bitcoin regtest environment
