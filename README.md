@@ -75,7 +75,7 @@ Our new graph-based trust algorithm is _not_ integrated into the prototype. This
 
 ## Mycelium
 
-This is the self-replication part. Any server with a bitcoin wallet and our scripts can buy another server, clone itself, move money to clone, and then then clone can buy more servers. This has proven to be very difficult to move from lab prototype into production-level code. We have been working [since 2016](https://repository.tudelft.nl/record/uuid:a1b443c7-8b37-4263-ae96-d38bc8b8f397) on this. See our [2017](https://github.com/Tribler/tribler/issues/3238) running code where we have a VPS and we're buying a VPN for it to make it more attack-resilient and lawyer-proof:
+This is the self-replication part. Any server with a bitcoin wallet and our scripts can buy another server, clone itself, move money to clone, and then then clone can buy more servers. This has proven to be very difficult to move from lab prototype into production-level code. We have been working [since 2016](https://repository.tudelft.nl/record/uuid:a1b443c7-8b37-4263-ae96-d38bc8b8f397) on this. See our [2017](https://github.com/Tribler/tribler/issues/3238) running code in PyPi called [CloudOmate](https://pypi.org/project/cloudomate/) where you can buy a VPS fully scripted. No account creation, no bank account validation, no passport upload, no wait period. Basis for our self-replication:
     ![purchase_vps](https://user-images.githubusercontent.com/3180670/35234058-305cd0be-ffa0-11e7-99fb-d7c3bb2dea79.gif)
     
 Autonomous VPS provisioning system using Bitcoin payments and SporeStack API. Deploys [Mycelium a BitTorrent seedbox orchestrator](https://github.com/Tribler/superorganism-experiment/tree/main/self_replication_service__mycelium) for Creative Commons content. What it does:
