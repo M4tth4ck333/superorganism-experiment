@@ -12,7 +12,7 @@ Our work contains several novelties:
 
 ## Towards recursive self-improving AI
 
-Citizens should control AI. We want control of AI to be as simple as possible. Superorganism has a voting system based on new features. For example:
+Strong [AI is a natural monopoly](https://dx.doi.org/10.2139/ssrn.3810366). Citizens should control AI. We want control of AI to be as simple as possible. Superorganism has a voting system based on new features. For example:
 
 ![demo_of_democratic_voting_process](https://github.com/user-attachments/assets/c5881768-71df-4a82-8f7b-ad3c02a64ceb)
 
