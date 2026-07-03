@@ -12,6 +12,11 @@ Our work contains several novelties:
 
 Download .EXE : https://github.com/Tribler/superorganism-experiment/releases
 
+## AI before it was cool
+
+Together with Szeged University we deployed fully decentral machine learning in 2011 onwards, https://arxiv.org/abs/1109.1396
+Completely useless, due to lack of compute.
+
 ## Towards recursive self-improving AI
 
 Strong [AI is a natural monopoly](https://dx.doi.org/10.2139/ssrn.3810366). Citizens should control AI. We want control of AI to be as simple as possible. Superorganism has a system where you can vote for new features. For example:
