@@ -69,6 +69,10 @@ pyside6-rcc ui/resources/resources.qrc -o ui/resources/resources_rc.py
 - Different learn-to-rank models are [deployed in the network](https://github.com/Tribler/superorganism-experiment/blob/cb8a76c1a21a7cd99c5246a50c77f8aba3fbe343/crowdsourced_learn_to_rank/ltr-benchmarking/ltr_evaluator.py#L163) and performance score is determined (NDCG)
 - decentralized [multie-arm bandit](https://github.com/Tribler/superorganism-experiment/blob/cb8a76c1a21a7cd99c5246a50c77f8aba3fbe343/crowdsourced_learn_to_rank/ltr-benchmarking/mab.py) ensures survival-of-the-fittest and cleaning of low-performance variants.
 
+## Decentralized trust
+
+A new graph-based trust algorithm is _not_ integrated into the prototype.  This is a Sybil detection reference implementation. The FuSST algorithm fuses a trust graph G_T (the platform follow or interaction graph) with a behavioural graph G_B (a mutual k-NN graph over five platform-agnostic behavioural features) and runs belief propagation (SybilSCAR and SybilHP variants) over the combined structure, optionally seeded with a logistic-regression prior. This [repository contains the complete code](https://github.com/Tribler/superorganism-experiment/tree/main/two_graph_fusion_public) to reproduce every table and figure in the [thesis](https://github.com/user-attachments/files/29458168/Master_Thesis___Towards_Solving_Sybil_Attacks_Using_Social_Capital_Accounting-4.pdf) across four labelled datasets (Cresci-2015, Cresci-2017, TwiBot-20, TwiBot-22) plus the Twitter-270k engine-validation benchmark.
+
 ## Mycelium
 
 Autonomous VPS provisioning system using Bitcoin payments and SporeStack API. Deploys Mycelium a BitTorrent seedbox orchestrator for Creative Commons content. What it does:
