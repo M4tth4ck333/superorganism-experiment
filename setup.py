@@ -30,6 +30,42 @@ packages = [
     "xgboost"
 ]
 
+python_excludes = [
+    "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.QtWebView",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.Qt3DCore",
+    "PySide6.Qt3DRender",
+    "PySide6.Qt3DInput",
+    "PySide6.Qt3DLogic",
+    "PySide6.Qt3DExtras",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+    "PySide6.QtQuickWidgets",
+]
+
+dll_excludes = [
+    "Qt6Multimedia.dll",
+    "Qt6MultimediaWidgets.dll",
+    "Qt6WebView.dll",
+    "Qt6WebEngineCore.dll",
+    "Qt6WebEngineWidgets.dll",
+    "Qt63DCore.dll",
+    "Qt63DRender.dll",
+    "Qt63DInput.dll",
+    "Qt63DLogic.dll",
+    "Qt63DExtras.dll",
+    "Qt6Qml.dll",
+    "Qt6QmlModels.dll",
+    "Qt6Quick.dll",
+    "Qt6QuickWidgets.dll",
+    "Qt6Pdf.dll",
+    "Qt6Designer.dll",
+    "Qt6VirtualKeyboard.dll",
+]
+
 build_exe_options = {
     "include_files": include_files,
     "packages": packages,
@@ -39,7 +75,8 @@ build_exe_options = {
         ("crowdsourced_learn_to_rank/ltr-benchmarking/", "crowdsourced_learn_to_rank/ltr-benchmarking/"),
         ("crowdsourced_learn_to_rank/", "crowdsourced_learn_to_rank/"),
     ],
-    "excludes": ["tkinter", "unittest", "email", "http.server"],
+    "excludes": python_excludes,
+    "bin_excludes": dll_excludes,
 }
 
 setup(

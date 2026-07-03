@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import traceback
 from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
@@ -62,7 +63,8 @@ class TorrentHealthThread(QThread):
 
                 self.startedOk.emit()
             except Exception as e:
-                self.error.emit(repr(e))
+                tb_string = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+                self.error.emit(tb_string)
 
         self._loop.create_task(_start())
 

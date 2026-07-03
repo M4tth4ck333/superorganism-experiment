@@ -186,9 +186,11 @@ def main() -> None:
 
     # --- Torrent health ---
     init_db()
-    KEY_FILE = str(
-        Path(__file__).parent / "torrent_health_and_investment" / "liberation_key.pem"
-    )
+    if getattr(sys, 'frozen', False):
+        KEY_FILE = str(pathlib.Path(sys.executable).parent / "liberation_key.pem")
+    else:
+        KEY_FILE = str(pathlib.Path(__file__).parent / "torrent_health_and_investment" / "liberation_key.pem")
+
     health_thread = TorrentHealthThread(key_file=KEY_FILE)
     health_thread.error.connect(lambda msg: print("Health error:", msg))
     health_thread.startedOk.connect(lambda: print("Health thread started"))
