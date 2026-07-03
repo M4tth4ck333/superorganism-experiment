@@ -43,6 +43,13 @@ Now that the basic components are all operational, we're working on integration.
 4) Search engine (ToDo [integrate our decentralized learn-to-rank AI algorithms](https://arxiv.org/html/2505.07452v1))
 5) Voting and use your Bitcoin wallet to stake your identity (ToDo move from testnet to mainnet)
 
+## Taking vibe ideas into production
+
+⚠️Exploratory prototype, this is to guide our production-grade work. Our Tribler production network will never contain any AI vibe code. We never had a full-scale network outage in 21 years.⚠️
+Superorganism-experiment vibe code is unstable and unmaintainable. The algorithms, interface, and architecture are purely proof-of-principles guiding our roadmap. With the new NWO [funding until 2032](https://www.tudelft.nl/en/2025/tu-delft/two-tu-delft-projects-awarded-kic-call-digital-identities-for-improving-digital-trust) we will create the first fully decentralized Youtube/Tiktok/Netwflix alternative with our [Sybil-tolerant MeritRank](https://arxiv.org/html/2207.09950v2) trust model. [Currently we're taking the first steps](https://github.com/Tribler/tribler/issues/9015) to re-implement superorganism ideas into production-level code. First priority is human coding of decentralized vector database, unigrams-based vocabulary and [SentencePiece]() integration.
+
+<img width="591" height="768" alt="Image" src="https://github.com/user-attachments/assets/be2f7cb3-4570-45bd-acd6-023d08fb4791" />
+
 ## General
 
 Qt UI resources are listed in the [ui/resources/](ui/resources/) directory, including icons, fonts, images, and the resource manifest. They must be converted using the PySide6 resource compiler. Run the following command after adding new UI resources:
