@@ -10,6 +10,8 @@ Our work contains several novelties:
 - 🥇 First decentralized voting system. Your place, your control, your vote.
 - 🥼 User-driven self-evolution. The emergent voting behavior is that users drive the roadmap using democracy. No lawyer or company can stop the will of the people.
 
+Download .EXE : https://github.com/Tribler/superorganism-experiment/releases
+
 ## Towards recursive self-improving AI
 
 Strong [AI is a natural monopoly](https://dx.doi.org/10.2139/ssrn.3810366). Citizens should control AI. We want control of AI to be as simple as possible. Superorganism has a system where you can vote for new features. For example:
