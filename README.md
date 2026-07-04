@@ -1,4 +1,5 @@
-# superorganism-experiment
+# superorganism-experiment: creating our own society
+
 We are creating our own society. A place citizens have FULL control, have their own MONEY, have AI that serves THEM, and CONTROL together. Unstoppable by design, self-replicating, self-hosted, self-evolving, and human oversight with democratic governance. Well, that is our Utopian dream! It now runs and empowers a network of _seedboxes_.
 
 Our work contains several novelties: 
