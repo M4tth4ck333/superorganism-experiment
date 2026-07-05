@@ -16,7 +16,7 @@ Download .EXE : https://github.com/Tribler/superorganism-experiment/releases
 ## AI before it was cool
 
 Together with Szeged University we deployed fully [decentral machine learning in 2012](https://web.archive.org/web/20220620053211/http://www.kl.csko.hu/projektek/msc_thesis.pdf).
-Completely useless, due to lack of compute, lack of data, and our lack of experience. 
+Completely useless, due to lack of compute, lack of data, and our lack of experience. Last year we got [decentral learning for search operational](https://arxiv.org/html/2505.07452v1) plus the business model.
 
 ## Towards recursive self-improving AI
 
